@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SpeakFlow — Train Your Presence</title>
+<title>Pebble Labs — Focus Session</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,15 +11,48 @@
   <!-- LANDING SCREEN -->
   <section id="landing" class="screen">
     <div class="screen-inner card">
-      <h1>SpeakFlow</h1>
-      <p class="subtitle">Practice a speech, pitch, or interview answer. We'll quietly track your eye contact, blink rate, and posture, then share a few thoughts afterward.</p>
+      <span class="eyebrow">Pebble Labs · Experiment 002</span>
+      <h1>Focus Session</h1>
+      <p class="subtitle">A short research session. We quietly watch your blink rate, gaze, and head movement through your webcam while you read or work, then ask how focused you felt a few times along the way.</p>
+
+      <div class="task-choice">
+        <label class="task-option">
+          <input type="radio" name="taskType" id="taskRead" value="read" checked />
+          <span class="task-option-title">Read a passage</span>
+          <span class="task-option-sub">We provide a short text</span>
+        </label>
+        <label class="task-option">
+          <input type="radio" name="taskType" id="taskWork" value="work" />
+          <span class="task-option-title">Work on your own</span>
+          <span class="task-option-sub">Use your normal tasks</span>
+        </label>
+      </div>
+
       <ul class="notes">
-        <li>Nothing is recorded or uploaded — only small numeric stats are used for feedback.</li>
+        <li>Nothing is recorded or uploaded — your video never leaves this browser. Only numeric stats and your check-in answers are saved.</li>
         <li>Find a well-lit spot and face your camera directly.</li>
-        <li>Sessions run up to 2 minutes, or stop anytime.</li>
+        <li>Sessions run about 10 minutes. You'll get a couple of quick "still focused?" check-ins along the way.</li>
+        <li>You can stop at any time — nothing bad happens if you do.</li>
       </ul>
+
+      <label class="consent-row">
+        <input type="checkbox" id="consentCheck" />
+        <span>I'm 18 or older and okay with my webcam being used live for this session.</span>
+      </label>
+
       <button id="startBtn" class="btn-primary">Start Session</button>
       <p id="landingError" class="error-text"></p>
+    </div>
+  </section>
+
+  <!-- READING TEXT SCREEN (shown only if "Read a passage" is selected) -->
+  <section id="readingText" class="screen hidden">
+    <div class="screen-inner card">
+      <span class="eyebrow">Reading passage</span>
+      <p class="reading-passage">
+        The Pebble Labs research program exists to answer one question before any hardware gets built: can passive signals — the way someone blinks, where they look, how still they hold their head — reveal something real about their attention and fatigue? Most wearable products start with a sensor and work backward to a use case. This project starts with the human problem and tests, honestly, whether the signal is there at all. Read this passage naturally, at whatever pace feels normal, and don't worry about performing for the camera — the goal is to see how you actually behave, not how you think you should.
+      </p>
+      <button id="continueToSessionBtn" class="btn-primary">I'm ready — start tracking</button>
     </div>
   </section>
 
@@ -65,7 +98,7 @@
         </svg>
         <div class="score-center">
           <span class="score-value" id="presenceScoreValue">--</span>
-          <span class="score-label">Presence</span>
+          <span class="score-label">Focus Score</span>
         </div>
       </div>
 
@@ -91,12 +124,12 @@
       <div class="feedback-card">
         <span class="feedback-icon">◆</span>
         <div class="feedback-body">
-          <span class="feedback-title">Coach's Note</span>
-          <p id="feedbackText" class="feedback-text">Thinking it over…</p>
+          <span class="feedback-title">Session Note</span>
+          <p id="feedbackText" class="feedback-text">Wrapping up…</p>
         </div>
       </div>
 
-      <button id="restartBtn" class="btn-primary">Train Again</button>
+      <button id="restartBtn" class="btn-primary">Run Another Session</button>
     </div>
   </section>
 

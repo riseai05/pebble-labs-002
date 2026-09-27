@@ -16,13 +16,16 @@ const SELF_REPORT_EVERY_SEC = 150; // every 2.5 min
 
 const screens = {
   landing: document.getElementById("landing"),
+  readingText: document.getElementById("readingText"),
   session: document.getElementById("session"),
   results: document.getElementById("results"),
 };
 const startBtn = document.getElementById("startBtn");
+const continueToSessionBtn = document.getElementById("continueToSessionBtn");
 const stopBtn = document.getElementById("stopBtn");
 const restartBtn = document.getElementById("restartBtn");
 const landingError = document.getElementById("landingError");
+const consentCheck = document.getElementById("consentCheck");
 const sessionStatus = document.getElementById("sessionStatus");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -50,6 +53,7 @@ let faceDetectedDurationMs = 0; // only time a real face was actually seen
 let lastFrameTimestamp = 0;
 let framesWaitedForReadiness = 0;
 let selfReports = []; // { atSec, response }
+let selectedTaskType = "read"; // "read" or "work"
 
 function showScreen(name) {
   Object.values(screens).forEach((el) => el.classList.add("hidden"));
@@ -85,6 +89,24 @@ async function loadFaceLandmarker() {
     runningMode: "VIDEO",
     numFaces: 1,
   });
+}
+
+function handleStartClick() {
+  landingError.textContent = "";
+
+  if (!consentCheck.checked) {
+    landingError.textContent = "Please confirm you're 18+ and okay with the webcam use before starting.";
+    return;
+  }
+
+  const taskInput = document.querySelector('input[name="taskType"]:checked');
+  selectedTaskType = taskInput ? taskInput.value : "read";
+
+  if (selectedTaskType === "read") {
+    showScreen("readingText");
+  } else {
+    startSession();
+  }
 }
 
 async function startSession() {
@@ -370,6 +392,7 @@ async function logSessionToSupabase(summary) {
       body: JSON.stringify({
         sessionId: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
+        taskType: selectedTaskType,
         ...summary,
         selfReports,
       }),
@@ -445,6 +468,7 @@ function resetToLanding() {
   postureValueEl.textContent = "--";
 }
 
-startBtn.addEventListener("click", startSession);
+startBtn.addEventListener("click", handleStartClick);
+continueToSessionBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", endSession);
 restartBtn.addEventListener("click", resetToLanding);

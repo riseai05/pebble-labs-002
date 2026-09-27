@@ -22,6 +22,7 @@ export default async function handler(req, res) {
   const {
     sessionId,
     timestamp,
+    taskType,
     durationSec,
     blinkCount,
     blinkRatePerMin,
@@ -48,6 +49,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         session_id: sessionId,
         created_at: timestamp,
+        task_type: taskType,
         duration_sec: durationSec,
         blink_count: blinkCount,
         blink_rate_per_min: blinkRatePerMin,
