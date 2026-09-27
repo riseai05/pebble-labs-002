@@ -1,17 +1,18 @@
-// SpeakFlow — client-side face tracking + session logic.
+// Pebble Labs — Experiment 002: focus/attention tracking during reading or work.
 // MediaPipe runs entirely in-browser via WASM, loaded from CDN below.
-// No video/images ever leave the browser — only small numeric summaries
-// are sent to /api/feedback at the end of a session.
+// No video ever leaves the browser — only small numeric summaries and
+// your self-reports are sent to /api/log-session at the end of a session.
 
 import {
   FaceLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-const MAX_SESSION_SECONDS = 120;
+const MAX_SESSION_SECONDS = 600; // 10 minutes
 const BLINK_THRESHOLD = 0.5;
 const BLINK_MIN_INTERVAL_MS = 350;
 const NO_FACE_SUSTAINED_THRESHOLD = 8; // consecutive frames before we call it sustained, not a blip
+const SELF_REPORT_EVERY_SEC = 150; // every 2.5 min
 
 const screens = {
   landing: document.getElementById("landing"),
@@ -34,11 +35,10 @@ const postureValueEl = document.getElementById("postureValue");
 
 let faceLandmarker = null;
 let stream = null;
-let mediaRecorder = null;
-let audioChunks = [];
 let rafId = null;
 let sessionStartMs = 0;
 let timerIntervalId = null;
+let selfReportIntervalId = null;
 
 let blinkCount = 0;
 let eyesCurrentlyClosed = false;
@@ -49,6 +49,7 @@ let consecutiveNoFaceFrames = 0;
 let faceDetectedDurationMs = 0; // only time a real face was actually seen
 let lastFrameTimestamp = 0;
 let framesWaitedForReadiness = 0;
+let selfReports = []; // { atSec, response }
 
 function showScreen(name) {
   Object.values(screens).forEach((el) => el.classList.add("hidden"));
@@ -91,8 +92,7 @@ async function startSession() {
   startBtn.disabled = true;
 
   // Defensive cleanup in case a previous session's stream wasn't fully
-  // torn down (e.g. the tab was interacted with unusually) — never build
-  // a new session on top of stale tracks.
+  // torn down — never build a new session on top of stale tracks.
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
@@ -101,11 +101,11 @@ async function startSession() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480 },
-      audio: true,
+      // No audio needed — this experiment tracks visual signals only.
     });
   } catch (err) {
     landingError.textContent =
-      "Couldn't access your camera/microphone. Please allow permission and try again.";
+      "Couldn't access your camera. Please allow permission and try again.";
     startBtn.disabled = false;
     return;
   }
@@ -113,17 +113,6 @@ async function startSession() {
   video.srcObject = stream;
   showScreen("session");
   sessionStatus.textContent = "Loading face tracking model…";
-
-  // Diagnostic: if getUserMedia succeeded but somehow granted 0 audio
-  // tracks (denied separately from camera, or a browser quirk), audio
-  // recording will silently produce nothing — surface that immediately
-  // rather than only discovering it after a failed transcription.
-  const audioTrackCount = stream.getAudioTracks().length;
-  console.log(`Audio tracks granted: ${audioTrackCount}`);
-  if (audioTrackCount === 0) {
-    sessionStatus.textContent =
-      "No microphone track was granted — speech won't be transcribed this session. Visual tracking will still work.";
-  }
 
   if (!faceLandmarker) {
     try {
@@ -147,20 +136,11 @@ async function startSession() {
   faceDetectedDurationMs = 0;
   lastFrameTimestamp = 0;
   framesWaitedForReadiness = 0;
+  selfReports = [];
   sessionStartMs = performance.now();
 
-  sessionStatus.textContent = "Tracking your face — look at the camera and speak naturally.";
+  sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
   stopBtn.classList.remove("hidden");
-
-  // Record audio (separate from the video track) for transcription after
-  // the session ends.
-  audioChunks = [];
-  const audioOnlyStream = new MediaStream(stream.getAudioTracks());
-  mediaRecorder = new MediaRecorder(audioOnlyStream);
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) audioChunks.push(e.data);
-  };
-  mediaRecorder.start();
 
   const setOverlaySize = () => {
     overlay.width = video.videoWidth || 640;
@@ -172,6 +152,18 @@ async function startSession() {
   detectFrame();
 
   timerIntervalId = setInterval(updateTimerDisplay, 250);
+  selfReportIntervalId = setInterval(promptSelfReport, SELF_REPORT_EVERY_SEC * 1000);
+}
+
+function promptSelfReport() {
+  const elapsedSec = Math.round((performance.now() - sessionStartMs) / 1000);
+  // TODO: replace with a proper in-page modal instead of prompt() —
+  // prompt() blocks the page, which is fine for testing but jarring
+  // for real testers. Keep the same { atSec, response } shape when you do.
+  const response = window.prompt(
+    "Still focused? (type 1 = fully focused, 2 = drifting, 3 = lost it)"
+  );
+  selfReports.push({ atSec: elapsedSec, response });
 }
 
 function updateTimerDisplay() {
@@ -218,12 +210,9 @@ function detectFrame() {
     processGaze(blendshapes);
     processHeadAngle(landmarks);
     drawSimpleOverlay(landmarks);
-    sessionStatus.textContent = "Tracking your face — look at the camera and speak naturally.";
+    sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
   } else {
     consecutiveNoFaceFrames += 1;
-    // Only flip to the "no face" state after a sustained run of missed
-    // frames, not a single dropped frame — avoids flicker on brief blinks
-    // or momentary detector noise.
     if (consecutiveNoFaceFrames >= NO_FACE_SUSTAINED_THRESHOLD) {
       animateValueUpdate(gazeValueEl, "--");
       animateValueUpdate(postureValueEl, "--");
@@ -273,8 +262,7 @@ function processGaze(blendshapes) {
 }
 
 // Light exponential smoothing to keep frame-to-frame landmark jitter from
-// dominating the variance calculation below (a real head is far steadier
-// than the raw per-frame landmark noise makes it look).
+// dominating the variance calculation below.
 let smoothedYaw = null;
 let smoothedPitch = null;
 let smoothedRoll = null;
@@ -293,13 +281,6 @@ function processHeadAngle(landmarks) {
   const midY = (leftEye.y + rightEye.y) / 2;
   const interEyeDist = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y) || 0.001;
 
-  // Real angle estimates via arctangent (treating inter-eye distance as an
-  // approximate depth reference), not a raw linear ratio. The previous
-  // version used (offset / interEyeDist) * 100, which isn't a real angle
-  // at all — it amplified tiny, normal landmark jitter into huge apparent
-  // swings, which combined with `roll` (a genuine degree value) in the
-  // same variance sum, made the combined score bottom out on nearly every
-  // session regardless of actual movement.
   const rawYaw = (Math.atan2(nose.x - midX, interEyeDist) * 180) / Math.PI;
   const rawPitch = (Math.atan2(nose.y - midY, interEyeDist) * 180) / Math.PI;
   const rawRoll = (Math.atan2(leftEye.y - rightEye.y, leftEye.x - rightEye.x) * 180) / Math.PI;
@@ -315,9 +296,6 @@ function processHeadAngle(landmarks) {
     variance(recent.map((h) => h.roll)) +
     variance(recent.map((h) => h.yaw)) +
     variance(recent.map((h) => h.pitch));
-  // Thresholds recalibrated for real degree-based variance: a calm,
-  // naturally-still head while talking typically sits well under 10
-  // (combined 3-axis variance); noticeable restlessness pushes past 40.
   animateValueUpdate(postureValueEl, tiltVariance < 10 ? "Stable" : tiltVariance < 40 ? "Shifting" : "Restless");
 }
 
@@ -349,6 +327,7 @@ function variance(arr) {
 async function endSession() {
   if (rafId) cancelAnimationFrame(rafId);
   if (timerIntervalId) clearInterval(timerIntervalId);
+  if (selfReportIntervalId) clearInterval(selfReportIntervalId);
 
   const durationSec = (performance.now() - sessionStartMs) / 1000;
 
@@ -363,14 +342,7 @@ async function endSession() {
   const yawVariance = variance(headAngleSamples.map((h) => h.yaw));
   const pitchVariance = variance(headAngleSamples.map((h) => h.pitch));
   const combinedVariance = rollVariance + yawVariance + pitchVariance;
-  // Recalibrated against real degree-based variance (previously this used
-  // an uncalibrated pseudo-unit that made almost every session hit 0).
-  // A combined variance around 150 (roughly "quite restless" across all
-  // three axes) now maps to 0; a calm, naturally-still session lands well
-  // above 80.
-  const postureStabilityScore = Math.round(
-    Math.max(0, 100 - combinedVariance * 0.65)
-  );
+  const postureStabilityScore = Math.round(Math.max(0, 100 - combinedVariance * 0.65));
 
   const summary = {
     durationSec: Math.round(durationSec),
@@ -382,45 +354,29 @@ async function endSession() {
 
   showResults(summary);
 
-  // Stop the audio recorder and wait for its final blob before doing
-  // anything else — stopping tracks too early can cut off the last chunk.
-  const transcript = await stopRecordingAndTranscribe();
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
 
-  fetchAiFeedback({ ...summary, ...transcript });
+  logSessionToSupabase(summary);
 }
 
-function stopRecordingAndTranscribe() {
-  return new Promise((resolve) => {
-    if (!mediaRecorder || mediaRecorder.state === "inactive") {
-      resolve({ transcript: "", noSpeechDetected: true });
-      return;
-    }
-
-    mediaRecorder.onstop = async () => {
-      try {
-        const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-        const res = await fetch("/api/transcribe", {
-          method: "POST",
-          headers: { "Content-Type": mediaRecorder.mimeType },
-          body: audioBlob,
-        });
-        const data = await res.json();
-        resolve({
-          transcript: data.transcript || "",
-          noSpeechDetected: Boolean(data.noSpeechDetected),
-        });
-      } catch (err) {
-        console.warn("Transcription request failed:", err);
-        resolve({ transcript: "", noSpeechDetected: true });
-      }
-    };
-
-    mediaRecorder.stop();
-  });
+async function logSessionToSupabase(summary) {
+  try {
+    await fetch("/api/log-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        ...summary,
+        selfReports,
+      }),
+    });
+  } catch (err) {
+    console.warn("Logging failed (session still shown to user):", err);
+  }
 }
 
 function showResults(summary) {
@@ -447,22 +403,11 @@ function showResults(summary) {
   document.getElementById("resBlinkRate").textContent = summary.blinkRatePerMin;
   document.getElementById("resGaze").textContent = `${summary.gazeStabilityScore}%`;
   document.getElementById("resPosture").textContent = `${summary.postureStabilityScore}%`;
-  document.getElementById("feedbackText").textContent = "Thinking it over…";
-}
 
-async function fetchAiFeedback(summary) {
-  try {
-    const res = await fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(summary),
-    });
-    const data = await res.json();
-    document.getElementById("feedbackText").textContent =
-      data.feedback || "Couldn't generate feedback this time — but your stats above are real.";
-  } catch (err) {
-    document.getElementById("feedbackText").textContent =
-      "Couldn't reach the feedback service. Your session stats above are still accurate.";
+  const feedbackEl = document.getElementById("feedbackText");
+  if (feedbackEl) {
+    feedbackEl.textContent =
+      "Session logged. Thanks for testing — this data helps us understand what these signals can actually reveal.";
   }
 }
 
@@ -472,17 +417,10 @@ function resetToLanding() {
   stopBtn.classList.add("hidden");
   landingError.textContent = "";
 
-  // Full reset — nothing from the previous session should carry over
-  // visually or in state, even before startSession() runs its own reset.
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-  if (mediaRecorder && mediaRecorder.state !== "inactive") {
-    mediaRecorder.stop();
-  }
-  mediaRecorder = null;
-  audioChunks = [];
 
   video.srcObject = null;
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
@@ -499,6 +437,7 @@ function resetToLanding() {
   faceDetectedDurationMs = 0;
   lastFrameTimestamp = 0;
   framesWaitedForReadiness = 0;
+  selfReports = [];
 
   timerValueEl.textContent = "0:00";
   blinkValueEl.textContent = "0";
