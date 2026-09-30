@@ -1,0 +1,594 @@
+/* Pebble Labs — Experiment 002
+   Minimal, classy theme: near-black background, warm ivory text,
+   a single muted gold accent. Deliberately quieter than SpeakFlow's
+   orange/energetic look — this is a research tool, not a coaching app. */
+
+:root {
+  --bg: #0b0b0d;
+  --card-bg: #131315;
+  --border: #232326;
+  --text: #ece7de;
+  --text-muted: #9a958c;
+  --accent: #c9a46b;
+  --accent-soft: rgba(201, 164, 107, 0.15);
+  --danger: #d9704f;
+  --radius: 16px;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  min-height: 100vh;
+}
+
+.hidden { display: none !important; }
+
+.screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+}
+
+.screen-inner {
+  width: 100%;
+  max-width: 480px;
+}
+
+#session .screen-inner {
+  max-width: 680px;
+}
+
+.exit-survey {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  margin-bottom: 24px;
+}
+
+.exit-survey-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 20px;
+  color: var(--text-muted);
+}
+
+.survey-q {
+  margin-bottom: 20px;
+}
+
+.survey-q-label {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.survey-scale {
+  display: flex;
+  gap: 8px;
+}
+
+.survey-scale label {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.survey-scale label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.survey-scale input {
+  display: none;
+}
+
+.survey-scale-wide label {
+  flex: 1;
+}
+
+.survey-text-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font);
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px 32px;
+}
+
+.eyebrow {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 24px;
+  text-align: center;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0 0 28px;
+  font-size: 15px;
+}
+
+.task-choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.task-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.task-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.task-option input {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  accent-color: var(--accent);
+}
+
+.task-option-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-option-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.notes {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notes li {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding-left: 18px;
+  position: relative;
+}
+
+.notes li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 24px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.consent-row input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.btn-primary, .btn-secondary {
+  width: 100%;
+  padding: 14px;
+  border-radius: 10px;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #1a1508;
+}
+
+.btn-primary:hover { opacity: 0.9; }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  margin-top: 16px;
+}
+
+.btn-secondary:hover { border-color: var(--accent); }
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+  margin-top: 12px;
+  min-height: 16px;
+}
+
+.reading-passage {
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--text);
+  margin-bottom: 28px;
+}
+
+/* Session screen */
+.video-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #000;
+  margin: 0 auto;
+}
+
+#video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(-1);
+}
+
+.hud {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-around;
+  background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
+  padding: 28px 10px 20px;
+}
+
+.hud-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.hud-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent);
+  transition: opacity 0.2s ease;
+}
+
+.hud-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.status-text {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 28px 0;
+}
+
+/* Controlled distraction trigger — styled like a generic phone message
+   notification (light/translucent, like real OS notifications, regardless
+   of the app's own dark theme) */
+.distraction-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92%;
+  max-width: 380px;
+  background: rgba(250, 250, 250, 0.95);
+  backdrop-filter: blur(14px);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  z-index: 50;
+  color: #111;
+}
+
+.imsg-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #34d399, #10b981);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.imsg-body { flex: 1; }
+
+.imsg-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.imsg-time { font-weight: 400; color: #666; font-size: 12px; }
+.imsg-text { font-size: 13px; color: #222; }
+
+/* Reading panel shown on the session screen for "read" mode */
+.reading-panel {
+  max-width: 640px;
+  margin: 0 auto 20px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+
+.reading-panel p {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  margin: 0 0 16px;
+}
+
+.reading-panel p:last-child { margin-bottom: 0; }
+
+/* Self-report / distraction-check overlay */
+.self-report-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 20px;
+}
+
+.self-report-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+
+.self-report-q {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 20px;
+}
+
+.self-report-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.self-report-btn {
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.self-report-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.self-report-why {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+.self-report-why-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.why-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.why-tag {
+  padding: 8px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.why-tag:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.self-report-skip {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Results screen */
+.score-ring-wrap {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  margin: 0 auto 28px;
+}
+
+.score-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+
+.ring-track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 8;
+}
+
+.ring-progress {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-dasharray: 377;
+  transition: stroke-dashoffset 0.8s ease;
+}
+
+.score-center {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.score-value {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.score-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.stat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.stat-row-label { color: var(--text-muted); }
+.stat-row-value { font-weight: 600; }
+
+.feedback-card {
+  display: flex;
+  gap: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.feedback-icon { color: var(--accent); font-size: 16px; }
+
+.feedback-title {
+  display: block;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.feedback-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  margin: 0;
+}

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pebble Labs — Focus Session</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- LANDING SCREEN -->
+  <section id="landing" class="screen">
+    <div class="screen-inner card">
+      <span class="eyebrow">Pebble Labs · Experiment 002</span>
+      <h1>Focus Session</h1>
+      <p class="subtitle">A short research session. We quietly watch your blink rate, gaze, and head movement through your webcam while you read or work, then ask how focused you felt a few times along the way.</p>
+
+      <div class="task-choice">
+        <label class="task-option">
+          <input type="radio" name="taskType" id="taskRead" value="read" checked />
+          <span class="task-option-title">Read a passage</span>
+          <span class="task-option-sub">We provide a short text</span>
+        </label>
+        <label class="task-option">
+          <input type="radio" name="taskType" id="taskWork" value="work" />
+          <span class="task-option-title">Work on your own</span>
+          <span class="task-option-sub">Use your normal tasks</span>
+        </label>
+      </div>
+
+      <ul class="notes">
+        <li>Nothing is recorded or uploaded — your video never leaves this browser. Only numeric stats and your check-in answers are saved.</li>
+        <li>We also log basic interaction signals (like switching tabs) to understand distraction, and at a couple of points during the session you may see a brief on-screen prompt as part of the test.</li>
+        <li>Find a well-lit spot and face your camera directly. On a phone, hold it upright — face tracking doesn't work reliably upside-down or sideways.</li>
+        <li>Sessions run about 10 minutes. You'll get a couple of quick "still focused?" check-ins along the way.</li>
+        <li>You can stop at any time — nothing bad happens if you do.</li>
+      </ul>
+
+      <label class="consent-row">
+        <input type="checkbox" id="consentCheck" />
+        <span>I'm 18 or older and okay with my webcam being used live for this session.</span>
+      </label>
+
+      <button id="startBtn" class="btn-primary">Start Session</button>
+      <p id="landingError" class="error-text"></p>
+    </div>
+  </section>
+
+  <!-- SESSION SCREEN -->
+  <section id="session" class="screen hidden">
+    <div class="screen-inner">
+      <div id="sessionReadingPanel" class="reading-panel hidden">
+        <span class="eyebrow">Reading passage — keep reading naturally</span>
+        <p>The idea behind Pebble Labs is simple to state and hard to answer honestly: can the small, involuntary things a body does — how often it blinks, where the eyes settle, how still or restless the head is — say something real about a person's attention and fatigue, before any device is built to act on it? Most wearable products work backward from a sensor. A company builds something that can measure heart rate, or motion, or skin temperature, and only afterward asks what that measurement might be useful for. This project tries to run the argument the other way. It starts from a human problem — the way focus quietly degrades over the course of a task, long before someone notices it themselves — and asks whether any passive, low-cost signal can actually see that happening.</p>
+        <p>There is a reasonable case that it can't. Blink rate is affected by screen brightness, dryness, caffeine, and a dozen other things that have nothing to do with attention. Head posture drifts for reasons as mundane as an uncomfortable chair. Gaze stability changes with the layout of whatever someone happens to be looking at. Any one of these signals, taken alone, is a weak and noisy proxy for something as slippery as "focus." That weakness is exactly why this is being tested rather than assumed. A hypothesis that survives contact with real, messy, everyday behavior is worth far more than one that only works in a tidy lab demo.</p>
+        <p>The honest way to test a hypothesis like this is not to ask people whether they think it's plausible. It's to put a cheap, unglamorous version of it in front of real people doing real things, and see what the data actually shows. A webcam and a browser tab are not a finished product. They are an instrument — the cheapest one available — built to answer one question before any hardware gets designed: is the signal there at all? If it is, that changes what gets built next. If it isn't, that's worth knowing just as much, and probably sooner.</p>
+        <p>Reading this passage is not, itself, the point. It's simply something ordinary to do while the tracking runs quietly in the background, the same way someone might read an email, a document, or an article on an ordinary day. There's no need to read carefully, perform interest, or try to look focused for the camera. The more naturally this is read — at whatever pace, with whatever lapses in attention actually happen — the more useful the resulting data is. A session where attention wanders exactly as it normally would is a better session than one where someone is trying hard to look engaged.</p>
+        <p>If the mind drifts partway through this — to a notification, a sound in the next room, a stray thought about something else entirely — that's not a failure of the test. It's the exact thing being measured. The goal from here is just to keep reading, at a natural pace, until the session ends on its own.</p>
+      </div>
+
+      <div class="video-wrap">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="hud">
+          <div class="hud-item">
+            <span class="hud-value" id="timerValue">0:00</span>
+            <span class="hud-label">Time</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-value" id="blinkValue">0</span>
+            <span class="hud-label">Blinks</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-value" id="gazeValue">--</span>
+            <span class="hud-label">Gaze</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-value" id="postureValue">--</span>
+            <span class="hud-label">Posture</span>
+          </div>
+        </div>
+      </div>
+      <p id="sessionStatus" class="status-text">Loading face tracking model…</p>
+      <button id="stopBtn" class="btn-secondary hidden">Stop Session</button>
+    </div>
+
+    <!-- Controlled distraction trigger, styled like a generic phone message notification -->
+    <div id="distractionBanner" class="distraction-banner hidden">
+      <div class="imsg-icon">💬</div>
+      <div class="imsg-body">
+        <div class="imsg-row">
+          <span class="imsg-sender">Messages</span>
+          <span class="imsg-time">now</span>
+        </div>
+        <div class="imsg-text">Hey — are you around later?</div>
+      </div>
+    </div>
+
+    <!-- Tap-based self-report, replacing the old blocking prompt() -->
+    <div id="selfReportOverlay" class="self-report-overlay hidden">
+      <div class="self-report-card">
+        <p class="self-report-q">Still focused?</p>
+        <div class="self-report-options">
+          <button type="button" class="self-report-btn" data-value="1">Fully focused</button>
+          <button type="button" class="self-report-btn" data-value="2">Drifting</button>
+          <button type="button" class="self-report-btn" data-value="3">Lost it</button>
+        </div>
+        <div id="selfReportWhy" class="self-report-why hidden">
+          <p class="self-report-why-label">What pulled you away? (optional)</p>
+          <div class="why-tags">
+            <button type="button" class="why-tag" data-tag="phone">Phone</button>
+            <button type="button" class="why-tag" data-tag="noise">Noise</button>
+            <button type="button" class="why-tag" data-tag="tired">Tired</button>
+            <button type="button" class="why-tag" data-tag="bored">Bored</button>
+            <button type="button" class="why-tag" data-tag="hard">Hard task</button>
+          </div>
+          <button type="button" id="selfReportSkipWhy" class="self-report-skip">Skip</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- One-tap question shown 30-60s after the controlled distraction trigger fires -->
+    <div id="distractionCheckOverlay" class="self-report-overlay hidden">
+      <div class="self-report-card">
+        <p class="self-report-q">Did something pull your attention just now?</p>
+        <div class="self-report-options">
+          <button type="button" class="self-report-btn" data-distraction-response="yes">Yes</button>
+          <button type="button" class="self-report-btn" data-distraction-response="no">No</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RESULTS SCREEN -->
+  <section id="results" class="screen hidden">
+    <div class="screen-inner card">
+      <h2>Session Complete</h2>
+
+      <div class="score-ring-wrap">
+        <svg class="score-ring" viewBox="0 0 140 140">
+          <circle class="ring-track" cx="70" cy="70" r="60" />
+          <circle class="ring-progress" id="ringProgress" cx="70" cy="70" r="60" />
+        </svg>
+        <div class="score-center">
+          <span class="score-value" id="presenceScoreValue">--</span>
+          <span class="score-label">Focus Score</span>
+        </div>
+      </div>
+
+      <div class="stat-list">
+        <div class="stat-row">
+          <span class="stat-row-label">Duration</span>
+          <span class="stat-row-value" id="resDuration">--</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Blinks / min</span>
+          <span class="stat-row-value" id="resBlinkRate">--</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Gaze stability</span>
+          <span class="stat-row-value" id="resGaze">--</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Posture stability</span>
+          <span class="stat-row-value" id="resPosture">--</span>
+        </div>
+      </div>
+
+      <div id="exitSurvey" class="exit-survey">
+        <h3 class="exit-survey-title">Quick last thing</h3>
+
+        <div class="survey-q">
+          <span class="survey-q-label">How accurate did this feel?</span>
+          <div class="survey-scale">
+            <label><input type="radio" name="accuracyRating" value="1" /> 1</label>
+            <label><input type="radio" name="accuracyRating" value="2" /> 2</label>
+            <label><input type="radio" name="accuracyRating" value="3" /> 3</label>
+            <label><input type="radio" name="accuracyRating" value="4" /> 4</label>
+            <label><input type="radio" name="accuracyRating" value="5" /> 5</label>
+          </div>
+        </div>
+
+        <div class="survey-q">
+          <span class="survey-q-label">Did anything surprise you about your results?</span>
+          <input type="text" id="surpriseInput" class="survey-text-input" placeholder="Optional — a sentence is fine" />
+        </div>
+
+        <div class="survey-q">
+          <span class="survey-q-label">Would you want to keep using something like this?</span>
+          <div class="survey-scale survey-scale-wide">
+            <label><input type="radio" name="wouldUse" value="yes" /> Yes</label>
+            <label><input type="radio" name="wouldUse" value="maybe" /> Maybe</label>
+            <label><input type="radio" name="wouldUse" value="no" /> No</label>
+          </div>
+        </div>
+
+        <button id="submitSurveyBtn" class="btn-primary">Submit &amp; Finish</button>
+      </div>
+
+      <div id="postSurveyThanks" class="feedback-card hidden">
+        <span class="feedback-icon">◆</span>
+        <div class="feedback-body">
+          <span class="feedback-title">Session Note</span>
+          <p id="feedbackText" class="feedback-text">Session logged. Thanks for testing — this data helps us understand what these signals can actually reveal.</p>
+        </div>
+      </div>
+
+      <button id="restartBtn" class="btn-primary hidden">Run Another Session</button>
+    </div>
+  </section>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
