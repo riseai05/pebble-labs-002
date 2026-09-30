@@ -42,6 +42,72 @@ html, body {
   max-width: 480px;
 }
 
+#session .screen-inner {
+  max-width: 680px;
+}
+
+.exit-survey {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  margin-bottom: 24px;
+}
+
+.exit-survey-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 20px;
+  color: var(--text-muted);
+}
+
+.survey-q {
+  margin-bottom: 20px;
+}
+
+.survey-q-label {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+.survey-scale {
+  display: flex;
+  gap: 8px;
+}
+
+.survey-scale label {
+  flex: 1;
+  text-align: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.survey-scale label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.survey-scale input {
+  display: none;
+}
+
+.survey-scale-wide label {
+  flex: 1;
+}
+
+.survey-text-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font);
+}
+
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -207,7 +273,7 @@ h2 {
 .video-wrap {
   position: relative;
   width: 100%;
-  max-width: 480px;
+  max-width: 640px;
   aspect-ratio: 4 / 3;
   border-radius: var(--radius);
   overflow: hidden;
@@ -239,7 +305,7 @@ h2 {
   display: flex;
   justify-content: space-around;
   background: linear-gradient(to top, rgba(0,0,0,0.75), transparent);
-  padding: 20px 10px 12px;
+  padding: 28px 10px 20px;
 }
 
 .hud-item {
@@ -249,25 +315,135 @@ h2 {
 }
 
 .hud-value {
-  font-size: 18px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--accent);
   transition: opacity 0.2s ease;
 }
 
 .hud-label {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .status-text {
   text-align: center;
   color: var(--text-muted);
+  font-size: 15px;
+  margin: 28px 0;
+}
+
+/* Controlled distraction trigger banner */
+.distraction-banner {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 20px;
   font-size: 14px;
-  margin: 20px 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 50;
+}
+
+/* Self-report / distraction-check overlay */
+.self-report-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 20px;
+}
+
+.self-report-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+}
+
+.self-report-q {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 20px;
+}
+
+.self-report-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.self-report-btn {
+  padding: 12px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.self-report-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.self-report-why {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+.self-report-why-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.why-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.why-tag {
+  padding: 8px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.why-tag:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.self-report-skip {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 /* Results screen */

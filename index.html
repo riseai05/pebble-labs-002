@@ -30,6 +30,7 @@
 
       <ul class="notes">
         <li>Nothing is recorded or uploaded — your video never leaves this browser. Only numeric stats and your check-in answers are saved.</li>
+        <li>We also log basic interaction signals (like switching tabs) to understand distraction, and at one point during the session you may see a brief on-screen prompt as part of the test.</li>
         <li>Find a well-lit spot and face your camera directly.</li>
         <li>Sessions run about 10 minutes. You'll get a couple of quick "still focused?" check-ins along the way.</li>
         <li>You can stop at any time — nothing bad happens if you do.</li>
@@ -84,6 +85,45 @@
       <p id="sessionStatus" class="status-text">Loading face tracking model…</p>
       <button id="stopBtn" class="btn-secondary hidden">Stop Session</button>
     </div>
+
+    <!-- Controlled distraction trigger — a generic-looking banner, not tied to any real notification -->
+    <div id="distractionBanner" class="distraction-banner hidden">
+      <span>🔔 New notification</span>
+    </div>
+
+    <!-- Tap-based self-report, replacing the old blocking prompt() -->
+    <div id="selfReportOverlay" class="self-report-overlay hidden">
+      <div class="self-report-card">
+        <p class="self-report-q">Still focused?</p>
+        <div class="self-report-options">
+          <button type="button" class="self-report-btn" data-value="1">Fully focused</button>
+          <button type="button" class="self-report-btn" data-value="2">Drifting</button>
+          <button type="button" class="self-report-btn" data-value="3">Lost it</button>
+        </div>
+        <div id="selfReportWhy" class="self-report-why hidden">
+          <p class="self-report-why-label">What pulled you away? (optional)</p>
+          <div class="why-tags">
+            <button type="button" class="why-tag" data-tag="phone">Phone</button>
+            <button type="button" class="why-tag" data-tag="noise">Noise</button>
+            <button type="button" class="why-tag" data-tag="tired">Tired</button>
+            <button type="button" class="why-tag" data-tag="bored">Bored</button>
+            <button type="button" class="why-tag" data-tag="hard">Hard task</button>
+          </div>
+          <button type="button" id="selfReportSkipWhy" class="self-report-skip">Skip</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- One-tap question shown 30-60s after the controlled distraction trigger fires -->
+    <div id="distractionCheckOverlay" class="self-report-overlay hidden">
+      <div class="self-report-card">
+        <p class="self-report-q">Did something pull your attention just now?</p>
+        <div class="self-report-options">
+          <button type="button" class="self-report-btn" data-distraction-response="yes">Yes</button>
+          <button type="button" class="self-report-btn" data-distraction-response="no">No</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- RESULTS SCREEN -->
@@ -121,15 +161,46 @@
         </div>
       </div>
 
-      <div class="feedback-card">
+      <div id="exitSurvey" class="exit-survey">
+        <h3 class="exit-survey-title">Quick last thing</h3>
+
+        <div class="survey-q">
+          <span class="survey-q-label">How accurate did this feel?</span>
+          <div class="survey-scale">
+            <label><input type="radio" name="accuracyRating" value="1" /> 1</label>
+            <label><input type="radio" name="accuracyRating" value="2" /> 2</label>
+            <label><input type="radio" name="accuracyRating" value="3" /> 3</label>
+            <label><input type="radio" name="accuracyRating" value="4" /> 4</label>
+            <label><input type="radio" name="accuracyRating" value="5" /> 5</label>
+          </div>
+        </div>
+
+        <div class="survey-q">
+          <span class="survey-q-label">Did anything surprise you about your results?</span>
+          <input type="text" id="surpriseInput" class="survey-text-input" placeholder="Optional — a sentence is fine" />
+        </div>
+
+        <div class="survey-q">
+          <span class="survey-q-label">Would you want to keep using something like this?</span>
+          <div class="survey-scale survey-scale-wide">
+            <label><input type="radio" name="wouldUse" value="yes" /> Yes</label>
+            <label><input type="radio" name="wouldUse" value="maybe" /> Maybe</label>
+            <label><input type="radio" name="wouldUse" value="no" /> No</label>
+          </div>
+        </div>
+
+        <button id="submitSurveyBtn" class="btn-primary">Submit &amp; Finish</button>
+      </div>
+
+      <div id="postSurveyThanks" class="feedback-card hidden">
         <span class="feedback-icon">◆</span>
         <div class="feedback-body">
           <span class="feedback-title">Session Note</span>
-          <p id="feedbackText" class="feedback-text">Wrapping up…</p>
+          <p id="feedbackText" class="feedback-text">Session logged. Thanks for testing — this data helps us understand what these signals can actually reveal.</p>
         </div>
       </div>
 
-      <button id="restartBtn" class="btn-primary">Run Another Session</button>
+      <button id="restartBtn" class="btn-primary hidden">Run Another Session</button>
     </div>
   </section>
 

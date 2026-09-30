@@ -1,7 +1,10 @@
 // Pebble Labs — Experiment 002: focus/attention tracking during reading or work.
 // MediaPipe runs entirely in-browser via WASM, loaded from CDN below.
-// No video ever leaves the browser — only small numeric summaries and
-// your self-reports are sent to /api/log-session at the end of a session.
+// No video ever leaves the browser. Visible metrics (blink/gaze/posture) plus
+// self-reports, a device-type tag, and interaction/distraction event timestamps
+// are sent to /api/log-session at the end of a session. No video or audio is
+// ever transmitted, and no keystroke content or mouse position is ever logged —
+// only the fact and timing of blur/visibility/idle/trigger events.
 
 import {
   FaceLandmarker,
@@ -13,6 +16,7 @@ const BLINK_THRESHOLD = 0.5;
 const BLINK_MIN_INTERVAL_MS = 350;
 const NO_FACE_SUSTAINED_THRESHOLD = 8; // consecutive frames before we call it sustained, not a blip
 const SELF_REPORT_EVERY_SEC = 150; // every 2.5 min
+const IDLE_THRESHOLD_MS = 15000; // only tracked in "work" mode
 
 const screens = {
   landing: document.getElementById("landing"),
@@ -26,6 +30,10 @@ const stopBtn = document.getElementById("stopBtn");
 const restartBtn = document.getElementById("restartBtn");
 const landingError = document.getElementById("landingError");
 const consentCheck = document.getElementById("consentCheck");
+const exitSurvey = document.getElementById("exitSurvey");
+const postSurveyThanks = document.getElementById("postSurveyThanks");
+const submitSurveyBtn = document.getElementById("submitSurveyBtn");
+const surpriseInput = document.getElementById("surpriseInput");
 const sessionStatus = document.getElementById("sessionStatus");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -36,12 +44,21 @@ const blinkValueEl = document.getElementById("blinkValue");
 const gazeValueEl = document.getElementById("gazeValue");
 const postureValueEl = document.getElementById("postureValue");
 
+const selfReportOverlay = document.getElementById("selfReportOverlay");
+const selfReportWhy = document.getElementById("selfReportWhy");
+const distractionBanner = document.getElementById("distractionBanner");
+const distractionCheckOverlay = document.getElementById("distractionCheckOverlay");
+
 let faceLandmarker = null;
 let stream = null;
 let rafId = null;
 let sessionStartMs = 0;
 let timerIntervalId = null;
 let selfReportIntervalId = null;
+let idleTimeoutId = null;
+let distractionTriggerTimeoutId = null;
+let distractionFollowupTimeoutId = null;
+let bannerHideTimeoutId = null;
 
 let blinkCount = 0;
 let eyesCurrentlyClosed = false;
@@ -52,8 +69,23 @@ let consecutiveNoFaceFrames = 0;
 let faceDetectedDurationMs = 0; // only time a real face was actually seen
 let lastFrameTimestamp = 0;
 let framesWaitedForReadiness = 0;
-let selfReports = []; // { atSec, response }
+let selfReports = []; // { atSec, response, why }
+let distractionEvents = []; // { type, atSec }
 let selectedTaskType = "read"; // "read" or "work"
+let lastSessionSummary = null; // held until exit survey is submitted
+let isIdle = false;
+let pendingSelfReportAtSec = null;
+let pendingSelfReportValue = null;
+
+// --- Device detection (user agent + screen/touch only, nothing invasive) ---
+function detectDeviceType() {
+  const ua = navigator.userAgent || "";
+  const isTouch = (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+  const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  const isSmallScreen = Math.min(window.innerWidth, window.innerHeight) < 500;
+  return isMobileUA || (isTouch && isSmallScreen) ? "mobile" : "desktop";
+}
+const deviceType = detectDeviceType();
 
 function showScreen(name) {
   Object.values(screens).forEach((el) => el.classList.add("hidden"));
@@ -113,8 +145,6 @@ async function startSession() {
   landingError.textContent = "";
   startBtn.disabled = true;
 
-  // Defensive cleanup in case a previous session's stream wasn't fully
-  // torn down — never build a new session on top of stale tracks.
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
@@ -123,7 +153,6 @@ async function startSession() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { width: 640, height: 480 },
-      // No audio needed — this experiment tracks visual signals only.
     });
   } catch (err) {
     landingError.textContent =
@@ -159,6 +188,8 @@ async function startSession() {
   lastFrameTimestamp = 0;
   framesWaitedForReadiness = 0;
   selfReports = [];
+  distractionEvents = [];
+  isIdle = false;
   sessionStartMs = performance.now();
 
   sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
@@ -175,17 +206,112 @@ async function startSession() {
 
   timerIntervalId = setInterval(updateTimerDisplay, 250);
   selfReportIntervalId = setInterval(promptSelfReport, SELF_REPORT_EVERY_SEC * 1000);
+
+  attachDistractionListeners();
+  scheduleDistractionTrigger();
 }
 
+// --- Invisible distraction tracking (never shown in UI) ---
+function logDistractionEvent(type) {
+  const atSec = Math.round((performance.now() - sessionStartMs) / 1000);
+  distractionEvents.push({ type, atSec });
+}
+
+function handleWindowBlur() { logDistractionEvent("window_blur"); }
+function handleWindowFocus() { logDistractionEvent("window_focus"); }
+function handleVisibilityChange() {
+  logDistractionEvent(document.visibilityState === "hidden" ? "tab_hidden" : "tab_visible");
+}
+
+function resetIdleTimer() {
+  if (selectedTaskType !== "work") return; // a focused reader can legitimately be still — skip idle tracking in read mode
+  if (isIdle) {
+    logDistractionEvent("idle_end");
+    isIdle = false;
+  }
+  clearTimeout(idleTimeoutId);
+  idleTimeoutId = setTimeout(() => {
+    isIdle = true;
+    logDistractionEvent("idle_start");
+  }, IDLE_THRESHOLD_MS);
+}
+
+function attachDistractionListeners() {
+  window.addEventListener("blur", handleWindowBlur);
+  window.addEventListener("focus", handleWindowFocus);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  if (selectedTaskType === "work") {
+    window.addEventListener("mousemove", resetIdleTimer);
+    window.addEventListener("keydown", resetIdleTimer);
+    resetIdleTimer();
+  }
+}
+
+function detachDistractionListeners() {
+  window.removeEventListener("blur", handleWindowBlur);
+  window.removeEventListener("focus", handleWindowFocus);
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  window.removeEventListener("mousemove", resetIdleTimer);
+  window.removeEventListener("keydown", resetIdleTimer);
+  clearTimeout(idleTimeoutId);
+}
+
+// --- Controlled distraction trigger: one staged moment per session, disclosed
+// in general terms on the consent screen but not timed or described exactly,
+// so it stays a valid test while nothing about it is hidden from the tester. ---
+function scheduleDistractionTrigger() {
+  const minDelaySec = MAX_SESSION_SECONDS * 0.2;
+  const maxDelaySec = MAX_SESSION_SECONDS * 0.7;
+  const delaySec = minDelaySec + Math.random() * (maxDelaySec - minDelaySec);
+  distractionTriggerTimeoutId = setTimeout(fireDistractionTrigger, delaySec * 1000);
+}
+
+function fireDistractionTrigger() {
+  logDistractionEvent("triggered_distraction_shown");
+  distractionBanner.classList.remove("hidden");
+  bannerHideTimeoutId = setTimeout(() => distractionBanner.classList.add("hidden"), 4000);
+
+  const followupDelaySec = 30 + Math.random() * 30; // ask 30-60s after the trigger
+  distractionFollowupTimeoutId = setTimeout(showDistractionCheck, followupDelaySec * 1000);
+}
+
+function showDistractionCheck() {
+  distractionCheckOverlay.classList.remove("hidden");
+}
+
+function handleDistractionCheckResponse(response) {
+  logDistractionEvent(`triggered_distraction_response_${response}`);
+  distractionCheckOverlay.classList.add("hidden");
+}
+
+function clearDistractionTimers() {
+  clearTimeout(distractionTriggerTimeoutId);
+  clearTimeout(distractionFollowupTimeoutId);
+  clearTimeout(bannerHideTimeoutId);
+  distractionBanner.classList.add("hidden");
+  distractionCheckOverlay.classList.add("hidden");
+}
+
+// --- Self-report: single tap, with an optional "why" for drifting/lost answers ---
 function promptSelfReport() {
-  const elapsedSec = Math.round((performance.now() - sessionStartMs) / 1000);
-  // TODO: replace with a proper in-page modal instead of prompt() —
-  // prompt() blocks the page, which is fine for testing but jarring
-  // for real testers. Keep the same { atSec, response } shape when you do.
-  const response = window.prompt(
-    "Still focused? (type 1 = fully focused, 2 = drifting, 3 = lost it)"
-  );
-  selfReports.push({ atSec: elapsedSec, response });
+  pendingSelfReportAtSec = Math.round((performance.now() - sessionStartMs) / 1000);
+  selfReportWhy.classList.add("hidden");
+  selfReportOverlay.classList.remove("hidden");
+}
+
+function handleSelfReportChoice(value) {
+  pendingSelfReportValue = value;
+  if (value === "1") {
+    finalizeSelfReport(null);
+  } else {
+    selfReportWhy.classList.remove("hidden");
+  }
+}
+
+function finalizeSelfReport(why) {
+  selfReports.push({ atSec: pendingSelfReportAtSec, response: pendingSelfReportValue, why: why || null });
+  selfReportOverlay.classList.add("hidden");
+  selfReportWhy.classList.add("hidden");
 }
 
 function updateTimerDisplay() {
@@ -311,6 +437,12 @@ function processHeadAngle(landmarks) {
   smoothedPitch = smooth(smoothedPitch, rawPitch);
   smoothedRoll = smooth(smoothedRoll, rawRoll);
 
+  // rawPitch/smoothedPitch doubles as a forward-lean / head-drop proxy:
+  // a sustained positive pitch means the head is tilting down relative to
+  // the eye line, which is what forward lean and head-drop both produce.
+  // This is not the same as a true body-pose forward-lean angle (that needs
+  // shoulder/torso landmarks from a pose model, which isn't in this
+  // pipeline) — treat it as a head-only approximation.
   headAngleSamples.push({ yaw: smoothedYaw, pitch: smoothedPitch, roll: smoothedRoll });
 
   const recent = headAngleSamples.slice(-30);
@@ -323,7 +455,7 @@ function processHeadAngle(landmarks) {
 
 function drawSimpleOverlay(landmarks) {
   const pointsToDraw = [1, 33, 263, 133, 362];
-  overlayCtx.fillStyle = "#ff6a1a";
+  overlayCtx.fillStyle = "#c9a46b";
   pointsToDraw.forEach((i) => {
     const p = landmarks[i];
     if (!p) return;
@@ -350,6 +482,9 @@ async function endSession() {
   if (rafId) cancelAnimationFrame(rafId);
   if (timerIntervalId) clearInterval(timerIntervalId);
   if (selfReportIntervalId) clearInterval(selfReportIntervalId);
+  detachDistractionListeners();
+  clearDistractionTimers();
+  selfReportOverlay.classList.add("hidden");
 
   const durationSec = (performance.now() - sessionStartMs) / 1000;
 
@@ -366,25 +501,54 @@ async function endSession() {
   const combinedVariance = rollVariance + yawVariance + pitchVariance;
   const postureStabilityScore = Math.round(Math.max(0, 100 - combinedVariance * 0.65));
 
+  // Structured posture detail (backend-only, never shown in the UI).
+  // headDropAngle: average smoothed pitch — a proxy for forward lean/head drop.
+  // fidgetScore: same combined variance used above, kept separately so it can
+  // be analyzed on its own as a movement-frequency proxy.
+  // shoulderAsymmetry is intentionally omitted — it needs body-pose landmarks
+  // (shoulders/torso), which this face-only tracker doesn't capture.
+  const headDropAngle = Math.round(average(headAngleSamples.map((h) => h.pitch)) * 10) / 10;
+  const fidgetScore = Math.round(combinedVariance * 10) / 10;
+
   const summary = {
     durationSec: Math.round(durationSec),
     blinkCount,
     blinkRatePerMin: Math.round(blinkRatePerMin),
     gazeStabilityScore,
     postureStabilityScore,
+    headDropAngle,
+    fidgetScore,
   };
 
+  lastSessionSummary = summary;
   showResults(summary);
 
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-
-  logSessionToSupabase(summary);
+  // Logging is deferred until the exit survey is submitted (see submitExitSurvey)
+  // so the survey answers travel with the same session row instead of a second write.
 }
 
-async function logSessionToSupabase(summary) {
+function submitExitSurvey() {
+  const accuracyInput = document.querySelector('input[name="accuracyRating"]:checked');
+  const wouldUseInput = document.querySelector('input[name="wouldUse"]:checked');
+
+  const exitSurveyAnswers = {
+    accuracyRating: accuracyInput ? accuracyInput.value : null,
+    surprise: surpriseInput.value.trim(),
+    wouldUse: wouldUseInput ? wouldUseInput.value : null,
+  };
+
+  logSessionToSupabase(lastSessionSummary, exitSurveyAnswers);
+
+  exitSurvey.classList.add("hidden");
+  postSurveyThanks.classList.remove("hidden");
+  restartBtn.classList.remove("hidden");
+}
+
+async function logSessionToSupabase(summary, exitSurveyAnswers) {
   try {
     await fetch("/api/log-session", {
       method: "POST",
@@ -393,8 +557,11 @@ async function logSessionToSupabase(summary) {
         sessionId: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         taskType: selectedTaskType,
+        deviceType,
         ...summary,
         selfReports,
+        distractionEvents,
+        exitSurvey: exitSurveyAnswers || null,
       }),
     });
   } catch (err) {
@@ -426,12 +593,9 @@ function showResults(summary) {
   document.getElementById("resBlinkRate").textContent = summary.blinkRatePerMin;
   document.getElementById("resGaze").textContent = `${summary.gazeStabilityScore}%`;
   document.getElementById("resPosture").textContent = `${summary.postureStabilityScore}%`;
-
-  const feedbackEl = document.getElementById("feedbackText");
-  if (feedbackEl) {
-    feedbackEl.textContent =
-      "Session logged. Thanks for testing — this data helps us understand what these signals can actually reveal.";
-  }
+  // headDropAngle and fidgetScore are logged but intentionally not shown here —
+  // only the metrics the tester already saw during the session (blink/gaze/posture)
+  // are surfaced at the end, per the "visible metrics only" rule.
 }
 
 function resetToLanding() {
@@ -439,6 +603,12 @@ function resetToLanding() {
   startBtn.disabled = false;
   stopBtn.classList.add("hidden");
   landingError.textContent = "";
+  exitSurvey.classList.remove("hidden");
+  postSurveyThanks.classList.add("hidden");
+  restartBtn.classList.add("hidden");
+  document.querySelectorAll('input[name="accuracyRating"]').forEach((el) => { el.checked = false; });
+  document.querySelectorAll('input[name="wouldUse"]').forEach((el) => { el.checked = false; });
+  surpriseInput.value = "";
 
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
@@ -461,6 +631,7 @@ function resetToLanding() {
   lastFrameTimestamp = 0;
   framesWaitedForReadiness = 0;
   selfReports = [];
+  distractionEvents = [];
 
   timerValueEl.textContent = "0:00";
   blinkValueEl.textContent = "0";
@@ -472,3 +643,17 @@ startBtn.addEventListener("click", handleStartClick);
 continueToSessionBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", endSession);
 restartBtn.addEventListener("click", resetToLanding);
+submitSurveyBtn.addEventListener("click", submitExitSurvey);
+
+document.querySelectorAll(".self-report-btn[data-value]").forEach((btn) => {
+  btn.addEventListener("click", () => handleSelfReportChoice(btn.dataset.value));
+});
+document.querySelectorAll(".why-tag").forEach((btn) => {
+  btn.addEventListener("click", () => finalizeSelfReport(btn.dataset.tag));
+});
+const skipWhyBtn = document.getElementById("selfReportSkipWhy");
+if (skipWhyBtn) skipWhyBtn.addEventListener("click", () => finalizeSelfReport(null));
+
+document.querySelectorAll("[data-distraction-response]").forEach((btn) => {
+  btn.addEventListener("click", () => handleDistractionCheckResponse(btn.dataset.distractionResponse));
+});
