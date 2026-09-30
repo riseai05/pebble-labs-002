@@ -336,19 +336,73 @@ h2 {
   margin: 28px 0;
 }
 
-/* Controlled distraction trigger banner */
+/* Controlled distraction trigger — styled like a generic phone message
+   notification (light/translucent, like real OS notifications, regardless
+   of the app's own dark theme) */
 .distraction-banner {
   position: fixed;
-  top: 24px;
-  right: 24px;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 92%;
+  max-width: 380px;
+  background: rgba(250, 250, 250, 0.95);
+  backdrop-filter: blur(14px);
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  z-index: 50;
+  color: #111;
+}
+
+.imsg-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #34d399, #10b981);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.imsg-body { flex: 1; }
+
+.imsg-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.imsg-time { font-weight: 400; color: #666; font-size: 12px; }
+.imsg-text { font-size: 13px; color: #222; }
+
+/* Reading panel shown on the session screen for "read" mode */
+.reading-panel {
+  max-width: 640px;
+  margin: 0 auto 20px;
+  max-height: 260px;
+  overflow-y: auto;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 20px;
-  font-size: 14px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-  z-index: 50;
+  border-radius: var(--radius);
+  padding: 20px 24px;
 }
+
+.reading-panel p {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  margin: 0 0 16px;
+}
+
+.reading-panel p:last-child { margin-bottom: 0; }
 
 /* Self-report / distraction-check overlay */
 .self-report-overlay {

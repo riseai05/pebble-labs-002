@@ -20,12 +20,10 @@ const IDLE_THRESHOLD_MS = 15000; // only tracked in "work" mode
 
 const screens = {
   landing: document.getElementById("landing"),
-  readingText: document.getElementById("readingText"),
   session: document.getElementById("session"),
   results: document.getElementById("results"),
 };
 const startBtn = document.getElementById("startBtn");
-const continueToSessionBtn = document.getElementById("continueToSessionBtn");
 const stopBtn = document.getElementById("stopBtn");
 const restartBtn = document.getElementById("restartBtn");
 const landingError = document.getElementById("landingError");
@@ -48,6 +46,7 @@ const selfReportOverlay = document.getElementById("selfReportOverlay");
 const selfReportWhy = document.getElementById("selfReportWhy");
 const distractionBanner = document.getElementById("distractionBanner");
 const distractionCheckOverlay = document.getElementById("distractionCheckOverlay");
+const sessionReadingPanel = document.getElementById("sessionReadingPanel");
 
 let faceLandmarker = null;
 let stream = null;
@@ -56,8 +55,8 @@ let sessionStartMs = 0;
 let timerIntervalId = null;
 let selfReportIntervalId = null;
 let idleTimeoutId = null;
-let distractionTriggerTimeoutId = null;
-let distractionFollowupTimeoutId = null;
+let distractionTriggerTimeoutIds = [];
+let distractionFollowupTimeoutIds = [];
 let bannerHideTimeoutId = null;
 
 let blinkCount = 0;
@@ -134,11 +133,7 @@ function handleStartClick() {
   const taskInput = document.querySelector('input[name="taskType"]:checked');
   selectedTaskType = taskInput ? taskInput.value : "read";
 
-  if (selectedTaskType === "read") {
-    showScreen("readingText");
-  } else {
-    startSession();
-  }
+  startSession();
 }
 
 async function startSession() {
@@ -163,6 +158,7 @@ async function startSession() {
 
   video.srcObject = stream;
   showScreen("session");
+  sessionReadingPanel.classList.toggle("hidden", selectedTaskType !== "read");
   sessionStatus.textContent = "Loading face tracking model…";
 
   if (!faceLandmarker) {
@@ -208,7 +204,7 @@ async function startSession() {
   selfReportIntervalId = setInterval(promptSelfReport, SELF_REPORT_EVERY_SEC * 1000);
 
   attachDistractionListeners();
-  scheduleDistractionTrigger();
+  scheduleDistractionTriggers();
 }
 
 // --- Invisible distraction tracking (never shown in UI) ---
@@ -256,14 +252,18 @@ function detachDistractionListeners() {
   clearTimeout(idleTimeoutId);
 }
 
-// --- Controlled distraction trigger: one staged moment per session, disclosed
-// in general terms on the consent screen but not timed or described exactly,
-// so it stays a valid test while nothing about it is hidden from the tester. ---
-function scheduleDistractionTrigger() {
-  const minDelaySec = MAX_SESSION_SECONDS * 0.2;
-  const maxDelaySec = MAX_SESSION_SECONDS * 0.7;
-  const delaySec = minDelaySec + Math.random() * (maxDelaySec - minDelaySec);
-  distractionTriggerTimeoutId = setTimeout(fireDistractionTrigger, delaySec * 1000);
+// --- Controlled distraction trigger: two fixed moments per session (1:50 and
+// 5:30), disclosed in general terms on the consent screen but not timed or
+// described exactly, so it stays a valid test while nothing is hidden. ---
+const DISTRACTION_TRIGGER_TIMES_SEC = [110, 330]; // 1:50 and 5:30
+
+function scheduleDistractionTriggers() {
+  DISTRACTION_TRIGGER_TIMES_SEC.forEach((atSec) => {
+    if (atSec < MAX_SESSION_SECONDS) {
+      const id = setTimeout(fireDistractionTrigger, atSec * 1000);
+      distractionTriggerTimeoutIds.push(id);
+    }
+  });
 }
 
 function fireDistractionTrigger() {
@@ -271,8 +271,9 @@ function fireDistractionTrigger() {
   distractionBanner.classList.remove("hidden");
   bannerHideTimeoutId = setTimeout(() => distractionBanner.classList.add("hidden"), 4000);
 
-  const followupDelaySec = 30 + Math.random() * 30; // ask 30-60s after the trigger
-  distractionFollowupTimeoutId = setTimeout(showDistractionCheck, followupDelaySec * 1000);
+  const followupDelaySec = 30 + Math.random() * 30; // ask 30-60s after this trigger
+  const followupId = setTimeout(showDistractionCheck, followupDelaySec * 1000);
+  distractionFollowupTimeoutIds.push(followupId);
 }
 
 function showDistractionCheck() {
@@ -285,8 +286,10 @@ function handleDistractionCheckResponse(response) {
 }
 
 function clearDistractionTimers() {
-  clearTimeout(distractionTriggerTimeoutId);
-  clearTimeout(distractionFollowupTimeoutId);
+  distractionTriggerTimeoutIds.forEach(clearTimeout);
+  distractionFollowupTimeoutIds.forEach(clearTimeout);
+  distractionTriggerTimeoutIds = [];
+  distractionFollowupTimeoutIds = [];
   clearTimeout(bannerHideTimeoutId);
   distractionBanner.classList.add("hidden");
   distractionCheckOverlay.classList.add("hidden");
@@ -640,7 +643,6 @@ function resetToLanding() {
 }
 
 startBtn.addEventListener("click", handleStartClick);
-continueToSessionBtn.addEventListener("click", startSession);
 stopBtn.addEventListener("click", endSession);
 restartBtn.addEventListener("click", resetToLanding);
 submitSurveyBtn.addEventListener("click", submitExitSurvey);

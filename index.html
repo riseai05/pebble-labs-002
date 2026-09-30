@@ -30,8 +30,8 @@
 
       <ul class="notes">
         <li>Nothing is recorded or uploaded — your video never leaves this browser. Only numeric stats and your check-in answers are saved.</li>
-        <li>We also log basic interaction signals (like switching tabs) to understand distraction, and at one point during the session you may see a brief on-screen prompt as part of the test.</li>
-        <li>Find a well-lit spot and face your camera directly.</li>
+        <li>We also log basic interaction signals (like switching tabs) to understand distraction, and at a couple of points during the session you may see a brief on-screen prompt as part of the test.</li>
+        <li>Find a well-lit spot and face your camera directly. On a phone, hold it upright — face tracking doesn't work reliably upside-down or sideways.</li>
         <li>Sessions run about 10 minutes. You'll get a couple of quick "still focused?" check-ins along the way.</li>
         <li>You can stop at any time — nothing bad happens if you do.</li>
       </ul>
@@ -46,20 +46,18 @@
     </div>
   </section>
 
-  <!-- READING TEXT SCREEN (shown only if "Read a passage" is selected) -->
-  <section id="readingText" class="screen hidden">
-    <div class="screen-inner card">
-      <span class="eyebrow">Reading passage</span>
-      <p class="reading-passage">
-        The Pebble Labs research program exists to answer one question before any hardware gets built: can passive signals — the way someone blinks, where they look, how still they hold their head — reveal something real about their attention and fatigue? Most wearable products start with a sensor and work backward to a use case. This project starts with the human problem and tests, honestly, whether the signal is there at all. Read this passage naturally, at whatever pace feels normal, and don't worry about performing for the camera — the goal is to see how you actually behave, not how you think you should.
-      </p>
-      <button id="continueToSessionBtn" class="btn-primary">I'm ready — start tracking</button>
-    </div>
-  </section>
-
   <!-- SESSION SCREEN -->
   <section id="session" class="screen hidden">
     <div class="screen-inner">
+      <div id="sessionReadingPanel" class="reading-panel hidden">
+        <span class="eyebrow">Reading passage — keep reading naturally</span>
+        <p>The idea behind Pebble Labs is simple to state and hard to answer honestly: can the small, involuntary things a body does — how often it blinks, where the eyes settle, how still or restless the head is — say something real about a person's attention and fatigue, before any device is built to act on it? Most wearable products work backward from a sensor. A company builds something that can measure heart rate, or motion, or skin temperature, and only afterward asks what that measurement might be useful for. This project tries to run the argument the other way. It starts from a human problem — the way focus quietly degrades over the course of a task, long before someone notices it themselves — and asks whether any passive, low-cost signal can actually see that happening.</p>
+        <p>There is a reasonable case that it can't. Blink rate is affected by screen brightness, dryness, caffeine, and a dozen other things that have nothing to do with attention. Head posture drifts for reasons as mundane as an uncomfortable chair. Gaze stability changes with the layout of whatever someone happens to be looking at. Any one of these signals, taken alone, is a weak and noisy proxy for something as slippery as "focus." That weakness is exactly why this is being tested rather than assumed. A hypothesis that survives contact with real, messy, everyday behavior is worth far more than one that only works in a tidy lab demo.</p>
+        <p>The honest way to test a hypothesis like this is not to ask people whether they think it's plausible. It's to put a cheap, unglamorous version of it in front of real people doing real things, and see what the data actually shows. A webcam and a browser tab are not a finished product. They are an instrument — the cheapest one available — built to answer one question before any hardware gets designed: is the signal there at all? If it is, that changes what gets built next. If it isn't, that's worth knowing just as much, and probably sooner.</p>
+        <p>Reading this passage is not, itself, the point. It's simply something ordinary to do while the tracking runs quietly in the background, the same way someone might read an email, a document, or an article on an ordinary day. There's no need to read carefully, perform interest, or try to look focused for the camera. The more naturally this is read — at whatever pace, with whatever lapses in attention actually happen — the more useful the resulting data is. A session where attention wanders exactly as it normally would is a better session than one where someone is trying hard to look engaged.</p>
+        <p>If the mind drifts partway through this — to a notification, a sound in the next room, a stray thought about something else entirely — that's not a failure of the test. It's the exact thing being measured. The goal from here is just to keep reading, at a natural pace, until the session ends on its own.</p>
+      </div>
+
       <div class="video-wrap">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
@@ -86,9 +84,16 @@
       <button id="stopBtn" class="btn-secondary hidden">Stop Session</button>
     </div>
 
-    <!-- Controlled distraction trigger — a generic-looking banner, not tied to any real notification -->
+    <!-- Controlled distraction trigger, styled like a generic phone message notification -->
     <div id="distractionBanner" class="distraction-banner hidden">
-      <span>🔔 New notification</span>
+      <div class="imsg-icon">💬</div>
+      <div class="imsg-body">
+        <div class="imsg-row">
+          <span class="imsg-sender">Messages</span>
+          <span class="imsg-time">now</span>
+        </div>
+        <div class="imsg-text">Hey — are you around later?</div>
+      </div>
     </div>
 
     <!-- Tap-based self-report, replacing the old blocking prompt() -->
