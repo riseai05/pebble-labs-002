@@ -1,19 +1,25 @@
 /* Pebble Labs — Experiment 002
-   Minimal, classy theme: near-black background, warm ivory text,
-   a single muted gold accent. Deliberately quieter than SpeakFlow's
-   orange/energetic look — this is a research tool, not a coaching app. */
+   Visual language borrowed from an Anthropic in-app announcement card:
+   near-black canvas, serif display headline, clean sans body, soft coral
+   "eyebrow" pill, thin-bordered rounded card with outline-icon rows and
+   hairline dividers, solid white pill primary button + outlined pill secondary. */
 
 :root {
-  --bg: #0b0b0d;
-  --card-bg: #131315;
-  --border: #232326;
-  --text: #ece7de;
-  --text-muted: #9a958c;
-  --accent: #c9a46b;
-  --accent-soft: rgba(201, 164, 107, 0.15);
-  --danger: #d9704f;
-  --radius: 16px;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #141413;
+  --card-bg: #181817;
+  --border: #33322f;
+  --hairline: #2c2b28;
+  --text: #f4f2ec;
+  --text-body: #e3e0d8;
+  --text-muted: #a8a49a;
+  --link: #b4b8a0;
+  --accent: #e5805f;
+  --accent-soft: rgba(229, 128, 95, 0.14);
+  --icon: #d9d5c9;
+  --danger: #e5805f;
+  --radius: 24px;
+  --font: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "Fraunces", "Iowan Old Style", Georgia, serif;
 }
 
 * { box-sizing: border-box; }
@@ -25,6 +31,7 @@ html, body {
   color: var(--text);
   font-family: var(--font);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
 .hidden { display: none !important; }
@@ -46,110 +53,107 @@ html, body {
   max-width: 680px;
 }
 
-.exit-survey {
-  border-top: 1px solid var(--border);
-  padding-top: 24px;
-  margin-bottom: 24px;
-}
+/* ---------- Typography ---------- */
 
-.exit-survey-title {
+.eyebrow {
+  display: inline-block;
   font-size: 15px;
-  font-weight: 600;
-  margin: 0 0 20px;
-  color: var(--text-muted);
-}
-
-.survey-q {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 7px 16px;
+  border-radius: 999px;
   margin-bottom: 20px;
 }
 
-.survey-q-label {
-  display: block;
-  font-size: 14px;
-  margin-bottom: 10px;
-}
-
-.survey-scale {
-  display: flex;
-  gap: 8px;
-}
-
-.survey-scale label {
-  flex: 1;
-  text-align: center;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.survey-scale label:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.survey-scale input {
-  display: none;
-}
-
-.survey-scale-wide label {
-  flex: 1;
-}
-
-.survey-text-input {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
+h1, h2, h3 {
+  font-family: var(--font-serif);
+  font-weight: 500;
   color: var(--text);
-  font-size: 14px;
-  font-family: var(--font);
 }
+
+h1 {
+  font-size: 36px;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 28px;
+  text-align: center;
+}
+
+.subtitle {
+  color: var(--text-body);
+  line-height: 1.45;
+  margin: 0 0 28px;
+  font-size: 17px;
+}
+
+/* ---------- Cards ---------- */
 
 .card {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 40px 32px;
+  padding: 36px 28px;
 }
 
-.eyebrow {
-  display: block;
-  font-size: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 12px;
+/* Landing sits directly on the canvas, like the announcement screen */
+#landing .card {
+  background: none;
+  border: none;
+  padding: 0;
 }
 
-h1 {
-  font-size: 28px;
-  font-weight: 600;
-  margin: 0 0 12px;
-  letter-spacing: -0.01em;
+.info-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 20px;
+  margin-bottom: 24px;
 }
 
-h2 {
-  font-size: 22px;
-  font-weight: 600;
-  margin: 0 0 24px;
-  text-align: center;
+.info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 0;
 }
 
-.subtitle {
-  color: var(--text-muted);
-  line-height: 1.6;
-  margin: 0 0 28px;
+.info-row + .info-row { border-top: 1px solid var(--hairline); }
+
+.info-row p {
+  margin: 0;
   font-size: 15px;
+  line-height: 1.45;
+  color: var(--text-body);
 }
+
+.info-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  fill: none;
+  stroke: var(--icon);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Task choice ---------- */
 
 .task-choice {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
 .task-option {
@@ -157,9 +161,9 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 20px;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -171,51 +175,30 @@ h2 {
 
 .task-option input {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 14px;
+  right: 14px;
   accent-color: var(--accent);
 }
 
 .task-option-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 500;
+  padding-right: 22px;
 }
 
 .task-option-sub {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.notes {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.notes li {
   font-size: 13px;
   color: var(--text-muted);
-  line-height: 1.5;
-  padding-left: 18px;
-  position: relative;
 }
 
-.notes li::before {
-  content: "—";
-  position: absolute;
-  left: 0;
-  color: var(--accent);
-}
+/* ---------- Consent ---------- */
 
 .consent-row {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 24px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
   line-height: 1.5;
   cursor: pointer;
@@ -223,44 +206,110 @@ h2 {
 
 .consent-row input {
   margin-top: 2px;
+  width: 18px;
+  height: 18px;
   accent-color: var(--accent);
 }
 
+/* ---------- Buttons: solid white pill + outlined pill ---------- */
+
 .btn-primary, .btn-secondary {
+  display: block;
   width: 100%;
-  padding: 14px;
-  border-radius: 10px;
-  border: none;
-  font-size: 15px;
-  font-weight: 600;
+  height: 56px;
+  padding: 0 20px;
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 17px;
+  font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.15s ease, transform 0.1s ease;
+  transition: opacity 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #1a1508;
+  background: #ffffff;
+  color: #141413;
+  border: none;
 }
 
-.btn-primary:hover { opacity: 0.9; }
-.btn-primary:active { transform: scale(0.98); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary:hover { opacity: 0.92; }
+.btn-primary:active { transform: scale(0.985); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-secondary {
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1.5px solid var(--border);
   color: var(--text);
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
-.btn-secondary:hover { border-color: var(--accent); }
+.btn-secondary:hover { border-color: #55534e; }
 
 .error-text {
   color: var(--danger);
-  font-size: 13px;
+  font-size: 14px;
   margin-top: 12px;
   min-height: 16px;
 }
+
+/* ---------- Exit survey ---------- */
+
+.exit-survey {
+  border-top: 1px solid var(--hairline);
+  padding-top: 24px;
+  margin-bottom: 24px;
+}
+
+.exit-survey-title {
+  font-size: 20px;
+  margin: 0 0 20px;
+  color: var(--text);
+}
+
+.survey-q { margin-bottom: 22px; }
+
+.survey-q-label {
+  display: block;
+  font-size: 15px;
+  color: var(--text-body);
+  margin-bottom: 10px;
+}
+
+.survey-scale { display: flex; gap: 8px; }
+
+.survey-scale label {
+  flex: 1;
+  text-align: center;
+  padding: 11px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.survey-scale label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.survey-scale input { display: none; }
+.survey-scale-wide label { flex: 1; }
+
+.survey-text-input {
+  width: 100%;
+  padding: 13px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-family: var(--font);
+}
+
+.survey-text-input:focus { outline: none; border-color: #55534e; }
+
+/* ---------- Session screen ---------- */
 
 .reading-passage {
   font-size: 16px;
@@ -269,7 +318,6 @@ h2 {
   margin-bottom: 28px;
 }
 
-/* Session screen */
 .video-wrap {
   position: relative;
   width: 100%;
@@ -315,16 +363,15 @@ h2 {
 }
 
 .hud-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--accent);
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--text);
   transition: opacity 0.2s ease;
 }
 
 .hud-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
 }
@@ -332,13 +379,35 @@ h2 {
 .status-text {
   text-align: center;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: 16px;
   margin: 28px 0;
 }
 
-/* Controlled distraction trigger — styled like a generic phone message
-   notification (light/translucent, like real OS notifications, regardless
-   of the app's own dark theme) */
+.reading-panel {
+  max-width: 640px;
+  margin: 0 auto 20px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+}
+
+.reading-panel .eyebrow { font-size: 13px; padding: 6px 14px; margin-bottom: 16px; }
+
+.reading-panel p {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--text-body);
+  margin: 0 0 16px;
+}
+
+.reading-panel p:last-child { margin-bottom: 0; }
+
+/* Controlled distraction trigger — deliberately styled like a generic OS
+   phone notification (light, translucent) so it reads as a real interruption,
+   NOT part of this app's own dark theme. */
 .distraction-banner {
   position: fixed;
   top: 16px;
@@ -375,40 +444,21 @@ h2 {
 .imsg-row {
   display: flex;
   justify-content: space-between;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 2px;
 }
 
 .imsg-time { font-weight: 400; color: #666; font-size: 12px; }
-.imsg-text { font-size: 13px; color: #222; }
+.imsg-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; color: #222; }
 
-/* Reading panel shown on the session screen for "read" mode */
-.reading-panel {
-  max-width: 640px;
-  margin: 0 auto 20px;
-  max-height: 260px;
-  overflow-y: auto;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px 24px;
-}
+/* ---------- Self-report / distraction-check overlay ---------- */
 
-.reading-panel p {
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--text);
-  margin: 0 0 16px;
-}
-
-.reading-panel p:last-child { margin-bottom: 0; }
-
-/* Self-report / distraction-check overlay */
 .self-report-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: rgba(10, 10, 9, 0.72);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -420,16 +470,19 @@ h2 {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 32px;
+  padding: 32px 28px;
   max-width: 420px;
   width: 100%;
   text-align: center;
 }
 
 .self-report-q {
-  font-size: 17px;
-  font-weight: 600;
-  margin: 0 0 20px;
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 24px;
 }
 
 .self-report-options {
@@ -440,13 +493,14 @@ h2 {
 }
 
 .self-report-btn {
-  padding: 12px 18px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  padding: 13px 22px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
   background: transparent;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 500;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -457,15 +511,15 @@ h2 {
 }
 
 .self-report-why {
-  margin-top: 22px;
-  padding-top: 22px;
-  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--hairline);
 }
 
 .self-report-why-label {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
-  margin: 0 0 12px;
+  margin: 0 0 14px;
 }
 
 .why-tags {
@@ -473,16 +527,17 @@ h2 {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .why-tag {
-  padding: 8px 14px;
-  border-radius: 20px;
+  padding: 9px 16px;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--text-body);
+  font-family: var(--font);
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -494,17 +549,19 @@ h2 {
 .self-report-skip {
   background: none;
   border: none;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--link);
+  font-family: var(--font);
+  font-size: 13px;
   text-decoration: underline;
   cursor: pointer;
 }
 
-/* Results screen */
+/* ---------- Results ---------- */
+
 .score-ring-wrap {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: 150px;
+  height: 150px;
   margin: 0 auto 28px;
 }
 
@@ -512,7 +569,7 @@ h2 {
 
 .ring-track {
   fill: none;
-  stroke: var(--border);
+  stroke: var(--hairline);
   stroke-width: 8;
 }
 
@@ -527,7 +584,7 @@ h2 {
 
 .score-center {
   position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -535,43 +592,44 @@ h2 {
 }
 
 .score-value {
-  font-size: 32px;
-  font-weight: 700;
+  font-family: var(--font-serif);
+  font-size: 40px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
 
 .score-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 12px;
   color: var(--text-muted);
   margin-top: 2px;
 }
 
 .stat-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 20px;
   margin-bottom: 24px;
 }
 
 .stat-row {
   display: flex;
   justify-content: space-between;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 14px;
+  align-items: center;
+  padding: 16px 0;
+  font-size: 16px;
 }
 
+.stat-row + .stat-row { border-top: 1px solid var(--hairline); }
+
 .stat-row-label { color: var(--text-muted); }
-.stat-row-value { font-weight: 600; }
+.stat-row-value { font-weight: 500; }
 
 .feedback-card {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   background: var(--accent-soft);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
+  border-radius: 20px;
+  padding: 18px;
   margin-bottom: 24px;
 }
 
@@ -579,16 +637,20 @@ h2 {
 
 .feedback-title {
   display: block;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--accent);
   margin-bottom: 4px;
 }
 
 .feedback-text {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.5;
-  color: var(--text);
+  color: var(--text-body);
   margin: 0;
+}
+
+@media (max-width: 420px) {
+  h1 { font-size: 32px; }
+  .card { padding: 28px 20px; }
 }
