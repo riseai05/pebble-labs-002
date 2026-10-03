@@ -77,27 +77,19 @@
         <p>If the mind drifts partway through this — to a notification, a sound in the next room, a stray thought about something else entirely — that's not a failure of the test. It's the exact thing being measured. The goal from here is just to keep reading, at a natural pace, until the session ends on its own.</p>
       </div>
 
-      <div class="video-wrap">
+      <!-- Camera + tracking run in the background. The element is kept rendered
+           (just invisible) because browsers pause video that is display:none. -->
+      <div class="capture-hidden" aria-hidden="true">
         <video id="video" autoplay playsinline muted></video>
         <canvas id="overlay"></canvas>
-        <div class="hud">
-          <div class="hud-item">
-            <span class="hud-value" id="timerValue">0:00</span>
-            <span class="hud-label">Time</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-value" id="blinkValue">0</span>
-            <span class="hud-label">Blinks</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-value" id="gazeValue">--</span>
-            <span class="hud-label">Gaze</span>
-          </div>
-          <div class="hud-item">
-            <span class="hud-value" id="postureValue">--</span>
-            <span class="hud-label">Posture</span>
-          </div>
-        </div>
+        <span id="blinkValue">0</span>
+        <span id="gazeValue">--</span>
+        <span id="postureValue">--</span>
+      </div>
+
+      <div class="tracker-bar">
+        <span class="tracker-dot"></span>
+        <span class="tracker-time" id="timerValue">0:00</span>
       </div>
       <p id="sessionStatus" class="status-text">Loading face tracking model…</p>
       <button id="stopBtn" class="btn-secondary hidden">Stop Session</button>
