@@ -11,9 +11,14 @@ import {
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
-const MAX_SESSION_SECONDS = 600; // 10 minutes
+const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
+const WORK_SESSION_SECONDS = 600; // 10 minutes
+function maxSessionSec() {
+  return selectedTaskType === "read" ? READ_SESSION_SECONDS : WORK_SESSION_SECONDS;
+}
 const BLINK_THRESHOLD = 0.5;
 const BLINK_MIN_INTERVAL_MS = 350;
+const BLINK_REOPEN_THRESHOLD = 0.35; // eyes must reopen past this before the next blink counts (stops flicker around 0.5, e.g. when looking down at a phone)
 const NO_FACE_SUSTAINED_THRESHOLD = 8; // consecutive frames before we call it sustained, not a blip
 const SELF_REPORT_EVERY_SEC = 150; // every 2.5 min
 const IDLE_THRESHOLD_MS = 15000; // only tracked in "work" mode
@@ -126,6 +131,7 @@ async function loadFaceLandmarker() {
 
 function handleStartClick() {
   landingError.textContent = "";
+  primeAudio();
 
   if (!consentCheck.checked) {
     landingError.textContent = "Please confirm you're 18+ and okay with the webcam use before starting.";
@@ -267,9 +273,12 @@ const DISTRACTION_TRIGGERS = [
   { atSec: 195, sender: "Mom", text: "Call me when you get a sec" },      // 3:15
 ];
 
+const DISTRACTION_FOLLOWUP_SEC = 20;
+let lastDistractionUiMs = -Infinity; // last time a banner / yes-no question appeared
+
 function scheduleDistractionTriggers() {
   DISTRACTION_TRIGGERS.forEach((trigger) => {
-    if (trigger.atSec < MAX_SESSION_SECONDS) {
+    if (trigger.atSec < maxSessionSec()) {
       const id = setTimeout(() => fireDistractionTrigger(trigger), trigger.atSec * 1000);
       distractionTriggerTimeoutIds.push(id);
     }
@@ -278,17 +287,58 @@ function scheduleDistractionTriggers() {
 
 function fireDistractionTrigger(trigger) {
   logDistractionEvent("triggered_distraction_shown");
+  lastDistractionUiMs = performance.now();
+  playChime();
   document.getElementById("bannerSender").textContent = trigger.sender;
   document.getElementById("bannerText").textContent = trigger.text;
   distractionBanner.classList.remove("hidden");
   bannerHideTimeoutId = setTimeout(() => distractionBanner.classList.add("hidden"), 4000);
 
-  const followupDelaySec = 30 + Math.random() * 30; // ask 30-60s after this trigger
-  const followupId = setTimeout(showDistractionCheck, followupDelaySec * 1000);
+  const followupId = setTimeout(showDistractionCheck, DISTRACTION_FOLLOWUP_SEC * 1000); // fixed delay so every session is measured the same way
   distractionFollowupTimeoutIds.push(followupId);
 }
 
+// Soft two-note notification chime, synthesized in the browser (no audio file,
+// and deliberately not a copy of any platform's real alert tone). The audio
+// context is unlocked on the Start tap so it is allowed to play later.
+let audioCtx = null;
+function primeAudio() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  } catch (e) { /* audio is optional */ }
+}
+
+async function playChime() {
+  try {
+    if (!audioCtx) { logDistractionEvent("banner_sound_unavailable"); return; }
+    if (audioCtx.state !== "running") {
+      await Promise.race([audioCtx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
+    }
+    if (audioCtx.state !== "running") { logDistractionEvent("banner_sound_blocked"); return; }
+    const now = audioCtx.currentTime;
+    [[1046.5, 0], [1318.5, 0.14]].forEach(([freq, offset]) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.28, now + offset + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.7);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.75);
+    });
+    logDistractionEvent("banner_sound_played");
+  } catch (e) {
+    logDistractionEvent("banner_sound_unavailable");
+  }
+}
+
 function showDistractionCheck() {
+  lastDistractionUiMs = performance.now();
   distractionCheckOverlay.classList.remove("hidden");
 }
 
@@ -309,6 +359,14 @@ function clearDistractionTimers() {
 
 // --- Self-report: single tap, with an optional "why" for drifting/lost answers ---
 function promptSelfReport() {
+  const elapsedSec = (performance.now() - sessionStartMs) / 1000;
+  if (elapsedSec > maxSessionSec() - 20) return; // not worth asking right at the end
+  const busy = !distractionCheckOverlay.classList.contains("hidden") ||
+    performance.now() - lastDistractionUiMs < 30000;
+  if (busy) { // don't stack on top of the banner / yes-no question; try again shortly
+    setTimeout(promptSelfReport, 15000);
+    return;
+  }
   pendingSelfReportAtSec = Math.round((performance.now() - sessionStartMs) / 1000);
   selfReportWhy.classList.add("hidden");
   selfReportOverlay.classList.remove("hidden");
@@ -335,7 +393,7 @@ function updateTimerDisplay() {
   const s = Math.floor(elapsedSec % 60);
   timerValueEl.textContent = `${m}:${s.toString().padStart(2, "0")}`;
 
-  if (elapsedSec >= MAX_SESSION_SECONDS) {
+  if (elapsedSec >= maxSessionSec()) {
     endSession();
   }
 }
@@ -405,7 +463,7 @@ function processBlink(blendshapes) {
       currentBucket().blinks += 1;
       animateValueUpdate(blinkValueEl, String(blinkCount));
     }
-  } else if (avgBlink <= BLINK_THRESHOLD && eyesCurrentlyClosed) {
+  } else if (avgBlink <= BLINK_REOPEN_THRESHOLD && eyesCurrentlyClosed) {
     eyesCurrentlyClosed = false;
   }
 }
