@@ -273,7 +273,7 @@ const DISTRACTION_TRIGGERS = [
   { atSec: 195, sender: "Mom", text: "Call me when you get a sec" },      // 3:15
 ];
 
-const DISTRACTION_FOLLOWUP_SEC = 20;
+const DISTRACTION_FOLLOWUP_SEC = 30;
 let lastDistractionUiMs = -Infinity; // last time a banner / yes-no question appeared
 
 function scheduleDistractionTriggers() {
