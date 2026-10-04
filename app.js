@@ -343,6 +343,7 @@ function showDistractionCheck() {
 }
 
 function handleDistractionCheckResponse(response) {
+  markTap();
   logDistractionEvent(`triggered_distraction_response_${response}`);
   distractionCheckOverlay.classList.add("hidden");
 }
@@ -373,6 +374,7 @@ function promptSelfReport() {
 }
 
 function handleSelfReportChoice(value) {
+  markTap();
   pendingSelfReportValue = value;
   if (value === "1") {
     finalizeSelfReport(null);
@@ -382,6 +384,7 @@ function handleSelfReportChoice(value) {
 }
 
 function finalizeSelfReport(why) {
+  markTap();
   selfReports.push({ atSec: pendingSelfReportAtSec, response: pendingSelfReportValue, why: why || null });
   selfReportOverlay.classList.add("hidden");
   selfReportWhy.classList.add("hidden");
@@ -477,20 +480,45 @@ function currentBucket() {
   return timelineBuckets[idx];
 }
 
+// Mark the current 10s chunk as containing a screen tap (self-report / yes-no
+// answer). Tapping a phone shakes it, which would otherwise look like fidgeting.
+function markTap() {
+  if (sessionStartMs) currentBucket().tap = true;
+}
+
+const TIMELINE_MIN_FRAMES = 10; // chunks with fewer face frames than this are too thin to trust (e.g. the last partial chunk)
+const TIMELINE_BASELINE_SEC = 30; // first 30s = this person's own "normal" gaze, used to remove phone-angle offset
+
 function buildTimeline() {
   const avg = (arr) => (arr.length ? average(arr) : null);
   const round1 = (n) => (n === null ? null : Math.round(n * 10) / 10);
+
+  // Personal baseline: mean raw gaze deviation over the first 30s of face frames.
+  // Reading down at a phone looks like "looking away" to the camera, so absolute
+  // gaze scores mostly reflect the angle; change from baseline is what matters.
+  const baselineFrames = [];
+  for (let i = 0; i < Math.ceil(TIMELINE_BASELINE_SEC / TIMELINE_BUCKET_SEC); i++) {
+    if (timelineBuckets[i]) baselineFrames.push(...timelineBuckets[i].gaze);
+  }
+  const baseline = baselineFrames.length >= TIMELINE_MIN_FRAMES ? average(baselineFrames) : null;
+
   const out = [];
   for (let i = 0; i < timelineBuckets.length; i++) {
     const b = timelineBuckets[i];
-    if (!b || !b.gaze.length) continue; // no face frames in this chunk
-    out.push({
+    if (!b || b.gaze.length < TIMELINE_MIN_FRAMES) continue; // too few face frames to trust
+    const meanDev = avg(b.gaze);
+    const row = {
       t: i * TIMELINE_BUCKET_SEC, // chunk start, seconds from session start
-      gaze: Math.round(Math.max(0, 100 - avg(b.gaze) * 100)),
+      gaze: Math.round(Math.max(0, 100 - meanDev * 100)),
+      // gazeRel: points of extra look-away vs. this person's own baseline (positive = looking away more)
+      gazeRel: baseline === null ? null : Math.round((meanDev - baseline) * 1000) / 10,
       blinks: b.blinks,
       pitch: round1(avg(b.pitch)),
       fidget: round1(variance(b.roll) + variance(b.yaw) + variance(b.pitch)),
-    });
+      n: b.gaze.length, // face frames in this chunk
+    };
+    if (b.tap) row.tap = true; // a screen tap happened here — treat fidget with caution
+    out.push(row);
   }
   return out;
 }
