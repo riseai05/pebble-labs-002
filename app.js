@@ -252,22 +252,28 @@ function detachDistractionListeners() {
   clearTimeout(idleTimeoutId);
 }
 
-// --- Controlled distraction trigger: two fixed moments per session (1:50 and
-// 5:30), disclosed in general terms on the consent screen but not timed or
+// --- Controlled distraction trigger: two fixed moments per session (1:09 and
+// 5:30) in both read and work mode, so results are comparable across modes.
+// Disclosed in general terms on the consent screen but not timed or
 // described exactly, so it stays a valid test while nothing is hidden. ---
-const DISTRACTION_TRIGGER_TIMES_SEC = [110, 330]; // 1:50 and 5:30
+const DISTRACTION_TRIGGERS = [
+  { atSec: 69,  sender: "Ali", text: "Bro are you free tonight?" },       // 1:09
+  { atSec: 330, sender: "Mom", text: "Call me when you get a sec" },      // 5:30
+];
 
 function scheduleDistractionTriggers() {
-  DISTRACTION_TRIGGER_TIMES_SEC.forEach((atSec) => {
-    if (atSec < MAX_SESSION_SECONDS) {
-      const id = setTimeout(fireDistractionTrigger, atSec * 1000);
+  DISTRACTION_TRIGGERS.forEach((trigger) => {
+    if (trigger.atSec < MAX_SESSION_SECONDS) {
+      const id = setTimeout(() => fireDistractionTrigger(trigger), trigger.atSec * 1000);
       distractionTriggerTimeoutIds.push(id);
     }
   });
 }
 
-function fireDistractionTrigger() {
+function fireDistractionTrigger(trigger) {
   logDistractionEvent("triggered_distraction_shown");
+  document.getElementById("bannerSender").textContent = trigger.sender;
+  document.getElementById("bannerText").textContent = trigger.text;
   distractionBanner.classList.remove("hidden");
   bannerHideTimeoutId = setTimeout(() => distractionBanner.classList.add("hidden"), 4000);
 
