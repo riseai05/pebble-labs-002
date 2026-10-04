@@ -70,6 +70,7 @@ let lastFrameTimestamp = 0;
 let framesWaitedForReadiness = 0;
 let selfReports = []; // { atSec, response, why }
 let distractionEvents = []; // { type, atSec }
+let sessionNickname = ""; // optional, saved to Supabase only — never shown back to the user
 let selectedTaskType = "read"; // "read" or "work"
 let lastSessionSummary = null; // held until exit survey is submitted
 let isIdle = false;
@@ -129,6 +130,9 @@ function handleStartClick() {
     landingError.textContent = "Please confirm you're 18+ and okay with the webcam use before starting.";
     return;
   }
+
+  const nicknameEl = document.getElementById("nicknameInput");
+  sessionNickname = nicknameEl ? nicknameEl.value.trim().slice(0, 30) : "";
 
   const taskInput = document.querySelector('input[name="taskType"]:checked');
   selectedTaskType = taskInput ? taskInput.value : "read";
@@ -253,12 +257,12 @@ function detachDistractionListeners() {
 }
 
 // --- Controlled distraction trigger: two fixed moments per session (1:09 and
-// 5:30) in both read and work mode, so results are comparable across modes.
+// 3:15) in both read and work mode, so results are comparable across modes.
 // Disclosed in general terms on the consent screen but not timed or
 // described exactly, so it stays a valid test while nothing is hidden. ---
 const DISTRACTION_TRIGGERS = [
   { atSec: 69,  sender: "Ali", text: "Bro are you free tonight?" },       // 1:09
-  { atSec: 330, sender: "Mom", text: "Call me when you get a sec" },      // 5:30
+  { atSec: 195, sender: "Mom", text: "Call me when you get a sec" },      // 3:15
 ];
 
 function scheduleDistractionTriggers() {
@@ -564,6 +568,7 @@ async function logSessionToSupabase(summary, exitSurveyAnswers) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: crypto.randomUUID(),
+        nickname: sessionNickname,
         timestamp: new Date().toISOString(),
         taskType: selectedTaskType,
         deviceType,

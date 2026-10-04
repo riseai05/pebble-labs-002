@@ -23,6 +23,7 @@ export default async function handler(req, res) {
   const {
     sessionId,
     timestamp,
+    nickname,
     taskType,
     deviceType,
     durationSec,
@@ -43,31 +44,42 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/sessions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        Prefer: "return=minimal",
-      },
-      body: JSON.stringify({
-        session_id: sessionId,
-        created_at: timestamp,
-        task_type: taskType,
-        device_type: deviceType,
-        duration_sec: durationSec,
-        blink_count: blinkCount,
-        blink_rate_per_min: blinkRatePerMin,
-        gaze_stability_score: gazeStabilityScore,
-        posture_stability_score: postureStabilityScore,
-        head_drop_angle: headDropAngle,
-        fidget_score: fidgetScore,
-        self_reports: selfReports,
-        distraction_events: distractionEvents,
-        exit_survey: exitSurvey,
-      }),
-    });
+    const row = {
+      session_id: sessionId,
+      created_at: timestamp,
+      task_type: taskType,
+      device_type: deviceType,
+      duration_sec: durationSec,
+      blink_count: blinkCount,
+      blink_rate_per_min: blinkRatePerMin,
+      gaze_stability_score: gazeStabilityScore,
+      posture_stability_score: postureStabilityScore,
+      head_drop_angle: headDropAngle,
+      fidget_score: fidgetScore,
+      self_reports: selfReports,
+      distraction_events: distractionEvents,
+      exit_survey: exitSurvey,
+    };
+
+    const insertRow = (body) =>
+      fetch(`${SUPABASE_URL}/rest/v1/sessions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify(body),
+      });
+
+    // nickname is optional and saved to Supabase only. If the column hasn't been
+    // added yet, retry without it so the session itself is never lost.
+    const nick = typeof nickname === "string" ? nickname.trim().slice(0, 30) : "";
+    let response = await insertRow(nick ? { ...row, nickname: nick } : row);
+    if (!response.ok && nick) {
+      response = await insertRow(row);
+    }
 
     if (!response.ok) {
       const errText = await response.text();
