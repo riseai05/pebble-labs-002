@@ -112,21 +112,70 @@ function animateValueUpdate(el, text) {
   requestAnimationFrame(() => { el.style.opacity = "1"; });
 }
 
+let modelLoadPromise = null;
+let modelLoadMs = null;
+let modelDelegate = null;
+let framesProcessed = 0; // frames actually run through the face model this session
+let warmUpInfo = null;
+
 async function loadFaceLandmarker() {
   const filesetResolver = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
   );
-  faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
-    baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-      delegate: "GPU",
-    },
-    outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: false,
-    runningMode: "VIDEO",
-    numFaces: 1,
-  });
+  const build = (delegate) =>
+    FaceLandmarker.createFromOptions(filesetResolver, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate,
+      },
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: false,
+      runningMode: "VIDEO",
+      numFaces: 1,
+    });
+  try {
+    faceLandmarker = await build("GPU");
+    modelDelegate = "GPU";
+  } catch (gpuErr) {
+    // some phones can't start the GPU path — slower CPU is better than failing outright
+    faceLandmarker = await build("CPU");
+    modelDelegate = "CPU";
+  }
+}
+
+// Start downloading/initializing the model as soon as the page opens, so it is
+// already ready by the time the person has read the consent screen and tapped Start.
+function ensureModel() {
+  if (!modelLoadPromise) {
+    const t0 = performance.now();
+    modelLoadPromise = loadFaceLandmarker()
+      .then(() => { modelLoadMs = Math.round(performance.now() - t0); })
+      .catch((err) => { modelLoadPromise = null; throw err; });
+  }
+  return modelLoadPromise;
+}
+ensureModel().catch(() => { /* retried when Start is tapped */ });
+
+// The first seconds of tracking are slow (graphics pipeline compiles on the first
+// frames), which used to land inside the measured session. Run the model on the
+// live camera BEFORE the session clock starts, until it is flowing, then begin.
+async function warmUpTracking(maxMs = 8000, wantFaceFrames = 15) {
+  const t0 = performance.now();
+  let frames = 0;
+  let faceFrames = 0;
+  while (performance.now() - t0 < maxMs && faceFrames < wantFaceFrames) {
+    await new Promise((r) => requestAnimationFrame(r));
+    if (video.readyState < 2) continue;
+    try {
+      const res = faceLandmarker.detectForVideo(video, performance.now());
+      frames += 1;
+      if (res.faceLandmarks && res.faceLandmarks.length > 0) faceFrames += 1;
+    } catch (e) {
+      break;
+    }
+  }
+  return { warmUpMs: Math.round(performance.now() - t0), warmUpFrames: frames, warmUpFaceFrames: faceFrames };
 }
 
 function handleStartClick() {
@@ -158,7 +207,7 @@ async function startSession() {
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480 },
+      video: { width: { ideal: 480 }, height: { ideal: 360 }, frameRate: { ideal: 30 }, facingMode: "user" },
     });
   } catch (err) {
     landingError.textContent =
@@ -172,15 +221,17 @@ async function startSession() {
   sessionReadingPanel.classList.toggle("hidden", selectedTaskType !== "read");
   sessionStatus.textContent = "Loading face tracking model…";
 
-  if (!faceLandmarker) {
-    try {
-      await loadFaceLandmarker();
-    } catch (err) {
-      sessionStatus.textContent =
-        "Failed to load face tracking. Check your connection and reload the page.";
-      return;
-    }
+  try {
+    await ensureModel();
+  } catch (err) {
+    sessionStatus.textContent =
+      "Failed to load face tracking. Check your connection and reload the page.";
+    startBtn.disabled = false;
+    return;
   }
+
+  sessionStatus.textContent = "Getting ready — look at the screen for a moment…";
+  warmUpInfo = await warmUpTracking();
 
   blinkCount = 0;
   eyesCurrentlyClosed = false;
@@ -198,6 +249,7 @@ async function startSession() {
   selfReports = [];
   distractionEvents = [];
   isIdle = false;
+  framesProcessed = 0;
   sessionStartMs = performance.now();
 
   sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
@@ -419,6 +471,7 @@ function detectFrame() {
   lastFrameTimestamp = now;
 
   const result = faceLandmarker.detectForVideo(video, now);
+  framesProcessed += 1;
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
   const faceFound = result.faceLandmarks && result.faceLandmarks.length > 0;
@@ -655,6 +708,12 @@ async function endSession() {
     headDropAngle,
     fidgetScore,
     timeline: buildTimeline(),
+    perf: {
+      modelLoadMs,
+      delegate: modelDelegate,
+      ...(warmUpInfo || {}),
+      avgFps: durationSec > 0 ? Math.round((framesProcessed / durationSec) * 10) / 10 : null,
+    },
   };
 
   lastSessionSummary = summary;

@@ -25,6 +25,7 @@ export default async function handler(req, res) {
     timestamp,
     nickname,
     timeline,
+    perf,
     taskType,
     deviceType,
     durationSec,
@@ -82,6 +83,7 @@ export default async function handler(req, res) {
     const extras = {};
     if (nick) extras.nickname = nick;
     if (Array.isArray(timeline) && timeline.length) extras.timeline = timeline;
+    if (perf && typeof perf === "object") extras.perf = perf;
 
     let response = await insertRow({ ...row, ...extras });
     if (!response.ok && Object.keys(extras).length) {
