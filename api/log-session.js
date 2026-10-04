@@ -24,6 +24,7 @@ export default async function handler(req, res) {
     sessionId,
     timestamp,
     nickname,
+    timeline,
     taskType,
     deviceType,
     durationSec,
@@ -76,9 +77,21 @@ export default async function handler(req, res) {
     // nickname is optional and saved to Supabase only. If the column hasn't been
     // added yet, retry without it so the session itself is never lost.
     const nick = typeof nickname === "string" ? nickname.trim().slice(0, 30) : "";
-    let response = await insertRow(nick ? { ...row, nickname: nick } : row);
-    if (!response.ok && nick) {
-      response = await insertRow(row);
+    // Optional columns (nickname, timeline). If a column hasn't been added in
+    // Supabase yet, retry without the extras so the session itself is never lost.
+    const extras = {};
+    if (nick) extras.nickname = nick;
+    if (Array.isArray(timeline) && timeline.length) extras.timeline = timeline;
+
+    let response = await insertRow({ ...row, ...extras });
+    if (!response.ok && Object.keys(extras).length) {
+      // try each extra on its own so one missing column doesn't drop the other
+      let saved = false;
+      for (const key of Object.keys(extras)) {
+        response = await insertRow({ ...row, [key]: extras[key] });
+        if (response.ok) { saved = true; break; }
+      }
+      if (!saved) response = await insertRow(row);
     }
 
     if (!response.ok) {

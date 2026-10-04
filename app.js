@@ -64,6 +64,7 @@ let eyesCurrentlyClosed = false;
 let lastBlinkTimestamp = 0;
 let gazeSamples = [];
 let headAngleSamples = [];
+let timelineBuckets = []; // 10-second chunks of raw sensor data, saved as a per-session timeline
 let consecutiveNoFaceFrames = 0;
 let faceDetectedDurationMs = 0; // only time a real face was actually seen
 let lastFrameTimestamp = 0;
@@ -180,6 +181,7 @@ async function startSession() {
   lastBlinkTimestamp = 0;
   gazeSamples = [];
   headAngleSamples = [];
+  timelineBuckets = [];
   smoothedYaw = null;
   smoothedPitch = null;
   smoothedRoll = null;
@@ -400,11 +402,39 @@ function processBlink(blendshapes) {
     if (now - lastBlinkTimestamp > BLINK_MIN_INTERVAL_MS) {
       lastBlinkTimestamp = now;
       blinkCount += 1;
+      currentBucket().blinks += 1;
       animateValueUpdate(blinkValueEl, String(blinkCount));
     }
   } else if (avgBlink <= BLINK_THRESHOLD && eyesCurrentlyClosed) {
     eyesCurrentlyClosed = false;
   }
+}
+
+const TIMELINE_BUCKET_SEC = 10;
+function currentBucket() {
+  const idx = Math.max(0, Math.floor((performance.now() - sessionStartMs) / 1000 / TIMELINE_BUCKET_SEC));
+  if (!timelineBuckets[idx]) {
+    timelineBuckets[idx] = { gaze: [], blinks: 0, yaw: [], pitch: [], roll: [] };
+  }
+  return timelineBuckets[idx];
+}
+
+function buildTimeline() {
+  const avg = (arr) => (arr.length ? average(arr) : null);
+  const round1 = (n) => (n === null ? null : Math.round(n * 10) / 10);
+  const out = [];
+  for (let i = 0; i < timelineBuckets.length; i++) {
+    const b = timelineBuckets[i];
+    if (!b || !b.gaze.length) continue; // no face frames in this chunk
+    out.push({
+      t: i * TIMELINE_BUCKET_SEC, // chunk start, seconds from session start
+      gaze: Math.round(Math.max(0, 100 - avg(b.gaze) * 100)),
+      blinks: b.blinks,
+      pitch: round1(avg(b.pitch)),
+      fidget: round1(variance(b.roll) + variance(b.yaw) + variance(b.pitch)),
+    });
+  }
+  return out;
 }
 
 function processGaze(blendshapes) {
@@ -417,6 +447,7 @@ function processGaze(blendshapes) {
     0
   );
   gazeSamples.push(maxDeviation);
+  currentBucket().gaze.push(maxDeviation);
 
   const recentAvg = average(gazeSamples.slice(-30));
   animateValueUpdate(gazeValueEl, recentAvg < 0.25 ? "Steady" : recentAvg < 0.5 ? "Drifting" : "Away");
@@ -457,6 +488,12 @@ function processHeadAngle(landmarks) {
   // shoulder/torso landmarks from a pose model, which isn't in this
   // pipeline) — treat it as a head-only approximation.
   headAngleSamples.push({ yaw: smoothedYaw, pitch: smoothedPitch, roll: smoothedRoll });
+  {
+    const b = currentBucket();
+    b.yaw.push(smoothedYaw);
+    b.pitch.push(smoothedPitch);
+    b.roll.push(smoothedRoll);
+  }
 
   const recent = headAngleSamples.slice(-30);
   const tiltVariance =
@@ -531,6 +568,7 @@ async function endSession() {
     postureStabilityScore,
     headDropAngle,
     fidgetScore,
+    timeline: buildTimeline(),
   };
 
   lastSessionSummary = summary;
@@ -637,6 +675,7 @@ function resetToLanding() {
   lastBlinkTimestamp = 0;
   gazeSamples = [];
   headAngleSamples = [];
+  timelineBuckets = [];
   smoothedYaw = null;
   smoothedPitch = null;
   smoothedRoll = null;
