@@ -510,6 +510,17 @@ function processBlink(blendshapes) {
   const right = getBlendshapeScore(blendshapes, "eyeBlinkRight");
   const avgBlink = (left + right) / 2;
 
+  // Diagnostics only (never changes counting): lets us see, per 10s chunk, whether
+  // a person's eyelid score ever crosses the threshold or gets stuck "closed".
+  {
+    const bk = currentBucket();
+    if (avgBlink < bk.bMin) bk.bMin = avgBlink;
+    if (avgBlink > bk.bMax) bk.bMax = avgBlink;
+    bk.bSum += avgBlink;
+    bk.bN += 1;
+    if (eyesCurrentlyClosed) bk.closedFrames += 1;
+  }
+
   if (avgBlink > BLINK_THRESHOLD && !eyesCurrentlyClosed) {
     eyesCurrentlyClosed = true;
     const now = performance.now();
@@ -528,7 +539,11 @@ const TIMELINE_BUCKET_SEC = 10;
 function currentBucket() {
   const idx = Math.max(0, Math.floor((performance.now() - sessionStartMs) / 1000 / TIMELINE_BUCKET_SEC));
   if (!timelineBuckets[idx]) {
-    timelineBuckets[idx] = { gaze: [], blinks: 0, yaw: [], pitch: [], roll: [] };
+    timelineBuckets[idx] = {
+      gaze: [], blinks: 0, yaw: [], pitch: [], roll: [],
+      // blink-score diagnostics: the raw eyelid-closure score the blink threshold is compared against
+      bMin: Infinity, bMax: -Infinity, bSum: 0, bN: 0, closedFrames: 0,
+    };
   }
   return timelineBuckets[idx];
 }
@@ -570,6 +585,13 @@ function buildTimeline() {
       fidget: round1(variance(b.roll) + variance(b.yaw) + variance(b.pitch)),
       n: b.gaze.length, // face frames in this chunk
     };
+    if (b.bN > 0) {
+      const r2 = (x) => Math.round(x * 100) / 100;
+      row.bMin = r2(b.bMin);               // lowest eyelid score (eyes open) — if this stays above ~0.35 blinks can get stuck "closed"
+      row.bMean = r2(b.bSum / b.bN);
+      row.bMax = r2(b.bMax);               // highest eyelid score — if this never nears 0.5, blinks are being missed
+      row.closed = r2(b.closedFrames / b.bN); // share of frames the tracker believed the eyes were closed (near 1 = stuck)
+    }
     if (b.tap) row.tap = true; // a screen tap happened here — treat fidget with caution
     out.push(row);
   }
