@@ -117,6 +117,8 @@ let modelLoadMs = null;
 let modelDelegate = null;
 let framesProcessed = 0; // frames actually run through the face model this session
 let warmUpInfo = null;
+let sessionEndReason = null; // "completed" | "stopped_by_user"
+let cameraLostAtSec = null; // set if the camera feed ends on its own mid-session
 
 async function loadFaceLandmarker() {
   const filesetResolver = await FilesetResolver.forVisionTasks(
@@ -217,6 +219,15 @@ async function startSession() {
   }
 
   video.srcObject = stream;
+  cameraLostAtSec = null;
+  stream.getVideoTracks().forEach((track) => {
+    // 'ended' only fires if the camera stops by itself (unplugged, taken by another app, permission revoked) — not when we stop it
+    track.addEventListener("ended", () => {
+      if (sessionStartMs && cameraLostAtSec === null) {
+        cameraLostAtSec = Math.round((performance.now() - sessionStartMs) / 1000);
+      }
+    });
+  });
   showScreen("session");
   sessionReadingPanel.classList.toggle("hidden", selectedTaskType !== "read");
   sessionStatus.textContent = "Loading face tracking model…";
@@ -449,7 +460,7 @@ function updateTimerDisplay() {
   timerValueEl.textContent = `${m}:${s.toString().padStart(2, "0")}`;
 
   if (elapsedSec >= maxSessionSec()) {
-    endSession();
+    endSession("completed");
   }
 }
 
@@ -472,6 +483,7 @@ function detectFrame() {
 
   const result = faceLandmarker.detectForVideo(video, now);
   framesProcessed += 1;
+  currentBucket().frames += 1;
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
   const faceFound = result.faceLandmarks && result.faceLandmarks.length > 0;
@@ -543,6 +555,7 @@ function currentBucket() {
       gaze: [], blinks: 0, yaw: [], pitch: [], roll: [],
       // blink-score diagnostics: the raw eyelid-closure score the blink threshold is compared against
       bMin: Infinity, bMax: -Infinity, bSum: 0, bN: 0, closedFrames: 0,
+      frames: 0, // every frame the model ran this chunk, with or without a face
     };
   }
   return timelineBuckets[idx];
@@ -573,7 +586,16 @@ function buildTimeline() {
   const out = [];
   for (let i = 0; i < timelineBuckets.length; i++) {
     const b = timelineBuckets[i];
-    if (!b || b.gaze.length < TIMELINE_MIN_FRAMES) continue; // too few face frames to trust
+    if (!b) continue;
+    if (b.gaze.length < TIMELINE_MIN_FRAMES) {
+      // Camera was running (enough frames) but the face was mostly not found: keep a
+      // marker row so "face lost / looked away" is visible. A tiny partial chunk
+      // (e.g. the very last fraction of a second) has too few frames and is dropped.
+      if ((b.frames || 0) >= TIMELINE_MIN_FRAMES) {
+        out.push({ t: i * TIMELINE_BUCKET_SEC, n: b.gaze.length, frames: b.frames, lost: true, blinks: b.blinks });
+      }
+      continue;
+    }
     const meanDev = avg(b.gaze);
     const row = {
       t: i * TIMELINE_BUCKET_SEC, // chunk start, seconds from session start
@@ -584,6 +606,7 @@ function buildTimeline() {
       pitch: round1(avg(b.pitch)),
       fidget: round1(variance(b.roll) + variance(b.yaw) + variance(b.pitch)),
       n: b.gaze.length, // face frames in this chunk
+      frames: b.frames || null, // all frames in this chunk; n / frames = share of time the face was visible
     };
     if (b.bN > 0) {
       const r2 = (x) => Math.round(x * 100) / 100;
@@ -689,7 +712,8 @@ function variance(arr) {
   return average(arr.map((v) => (v - m) ** 2));
 }
 
-async function endSession() {
+async function endSession(reason = "unknown") {
+  sessionEndReason = reason;
   if (rafId) cancelAnimationFrame(rafId);
   if (timerIntervalId) clearInterval(timerIntervalId);
   if (selfReportIntervalId) clearInterval(selfReportIntervalId);
@@ -735,6 +759,9 @@ async function endSession() {
       delegate: modelDelegate,
       ...(warmUpInfo || {}),
       avgFps: durationSec > 0 ? Math.round((framesProcessed / durationSec) * 10) / 10 : null,
+      endReason: sessionEndReason,
+      endedAtSec: Math.round(durationSec),
+      ...(cameraLostAtSec !== null ? { cameraLostAtSec } : {}),
     },
   };
 
@@ -860,7 +887,7 @@ function resetToLanding() {
 }
 
 startBtn.addEventListener("click", handleStartClick);
-stopBtn.addEventListener("click", endSession);
+stopBtn.addEventListener("click", () => endSession("stopped_by_user"));
 restartBtn.addEventListener("click", resetToLanding);
 submitSurveyBtn.addEventListener("click", submitExitSurvey);
 
