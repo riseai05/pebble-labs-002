@@ -43,6 +43,9 @@ const overlay = document.getElementById("overlay");
 const overlayCtx = overlay.getContext("2d");
 
 const timerValueEl = document.getElementById("timerValue");
+const timerValueReadEl = document.getElementById("timerValueRead");
+const sessionScreenEl = document.getElementById("session");
+const captureAreaEl = document.getElementById("captureArea");
 const blinkValueEl = document.getElementById("blinkValue");
 const gazeValueEl = document.getElementById("gazeValue");
 const postureValueEl = document.getElementById("postureValue");
@@ -232,6 +235,9 @@ async function startSession() {
   });
   showScreen("session");
   sessionReadingPanel.classList.toggle("hidden", selectedTaskType !== "read");
+  // Work mode shows the camera view + four readouts; read mode keeps the camera hidden.
+  sessionScreenEl.classList.toggle("work-mode", selectedTaskType === "work");
+  captureAreaEl.setAttribute("aria-hidden", selectedTaskType === "work" ? "false" : "true");
   sessionStatus.textContent = "Loading face tracking model…";
 
   try {
@@ -580,7 +586,9 @@ function updateTimerDisplay() {
   const elapsedSec = (performance.now() - sessionStartMs) / 1000;
   const m = Math.floor(elapsedSec / 60);
   const s = Math.floor(elapsedSec % 60);
-  timerValueEl.textContent = `${m}:${s.toString().padStart(2, "0")}`;
+  const clock = `${m}:${s.toString().padStart(2, "0")}`;
+  timerValueEl.textContent = clock;
+  timerValueReadEl.textContent = clock;
 
   if (elapsedSec >= maxSessionSec()) {
     endSession("completed");
@@ -897,6 +905,7 @@ async function endSession(reason = "unknown") {
       delegate: modelDelegate,
       ...(warmUpInfo || {}),
       avgFps: durationSec > 0 ? Math.round((framesProcessed / durationSec) * 10) / 10 : null,
+      cameraVisible: selectedTaskType === "work", // work mode shows the camera view; read mode hides it
       endReason: sessionEndReason,
       endedAtSec: Math.round(durationSec),
       ...(cameraLostAtSec !== null ? { cameraLostAtSec } : {}),
@@ -1031,6 +1040,8 @@ function resetToLanding() {
   distractionEvents = [];
 
   timerValueEl.textContent = "0:00";
+  timerValueReadEl.textContent = "0:00";
+  sessionScreenEl.classList.remove("work-mode");
   blinkValueEl.textContent = "0";
   gazeValueEl.textContent = "--";
   postureValueEl.textContent = "--";
