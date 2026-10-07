@@ -26,6 +26,8 @@ export default async function handler(req, res) {
     nickname,
     timeline,
     perf,
+    sessionNotes,
+    keyEvents,
     taskType,
     deviceType,
     durationSec,
@@ -84,6 +86,8 @@ export default async function handler(req, res) {
     if (nick) extras.nickname = nick;
     if (Array.isArray(timeline) && timeline.length) extras.timeline = timeline;
     if (perf && typeof perf === "object") extras.perf = perf;
+    if (typeof sessionNotes === "string" && sessionNotes) extras.session_notes = sessionNotes.slice(0, 4000);
+    if (Array.isArray(keyEvents) && keyEvents.length) extras.key_events = keyEvents;
 
     let response = await insertRow({ ...row, ...extras });
     if (!response.ok && Object.keys(extras).length) {

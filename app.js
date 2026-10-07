@@ -117,6 +117,8 @@ let modelLoadMs = null;
 let modelDelegate = null;
 let framesProcessed = 0; // frames actually run through the face model this session
 let warmUpInfo = null;
+let noFaceStartMs = null; // when the current "no face found" stretch began
+let faceLostSpans = []; // { startSec, durSec } for stretches of 3s or more without a face
 let sessionEndReason = null; // "completed" | "stopped_by_user"
 let cameraLostAtSec = null; // set if the camera feed ends on its own mid-session
 
@@ -261,6 +263,8 @@ async function startSession() {
   distractionEvents = [];
   isIdle = false;
   framesProcessed = 0;
+  noFaceStartMs = null;
+  faceLostSpans = [];
   sessionStartMs = performance.now();
 
   sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
@@ -276,7 +280,7 @@ async function startSession() {
   detectFrame();
 
   timerIntervalId = setInterval(updateTimerDisplay, 250);
-  selfReportIntervalId = setInterval(promptSelfReport, SELF_REPORT_EVERY_SEC * 1000);
+  // The periodic "Still focused?" check-in was removed on request; the yes/no question after each banner remains.
 
   attachDistractionListeners();
   scheduleDistractionTriggers();
@@ -453,6 +457,125 @@ function finalizeSelfReport(why) {
   selfReportWhy.classList.add("hidden");
 }
 
+// ---- Plain-language description of what happened in a session --------------
+// Built at the end of every session from signals we already collect, so each
+// Supabase row says in words what the person did (left the page, looked away,
+// moved a lot, ...). Everything here is a transparent rule on the saved data.
+function fmtClock(sec) {
+  const s = Math.max(0, Math.round(sec));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function buildSessionNotes(ctx) {
+  const { deviceType: device, taskType, durationSec, maxSec, endReason, timeline = [], distractionEvents: evs = [],
+          faceLostSpans: lostSpans = [], cameraLostAtSec: camLost = null } = ctx;
+  const events = [];
+  const add = (t, dur, type, detail) => events.push({ t: Math.round(t), dur: dur ? Math.round(dur) : null, type, detail });
+  const med = (arr) => { const s = [...arr].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+
+  // Left the page / app (page hidden -> visible again)
+  const hiddenSpans = [];
+  let hiddenAt = null;
+  for (const e of evs) {
+    if (e.type === "tab_hidden") hiddenAt = e.atSec;
+    else if (e.type === "tab_visible" && hiddenAt !== null) { hiddenSpans.push([hiddenAt, e.atSec]); hiddenAt = null; }
+  }
+  if (hiddenAt !== null) hiddenSpans.push([hiddenAt, durationSec]);
+  for (const [s, e] of hiddenSpans) {
+    if (e - s >= 2) {
+      add(s, e - s, "left_page", device === "mobile"
+        ? "Left the page: switched to another app (or locked the phone)"
+        : "Left the page: switched to another tab or window");
+    }
+  }
+  // Window lost focus (desktop click-away) not already explained by a hidden page
+  let blurAt = null;
+  for (const e of evs) {
+    if (e.type === "window_blur") blurAt = e.atSec;
+    else if (e.type === "window_focus" && blurAt !== null) {
+      const overlaps = hiddenSpans.some(([s, en]) => blurAt < en && e.atSec > s);
+      if (!overlaps && e.atSec - blurAt >= 3) add(blurAt, e.atSec - blurAt, "window_unfocused", "Clicked away from the page (another window had focus)");
+      blurAt = null;
+    }
+  }
+
+  // Face not visible for 3s or more
+  for (const sp of lostSpans) {
+    add(sp.startSec, sp.durSec, "face_lost", "Face not visible: looked away, left the frame, or moved the device");
+  }
+
+  // Chunk-level signals from the 10-second timeline
+  const normal = timeline.filter((r) => !r.lost && r.gaze !== undefined);
+  const basePitch = med(normal.map((r) => r.pitch).filter((p) => p !== null && p !== undefined));
+  const byType = {};
+  const mark = (type, r) => { (byType[type] = byType[type] || []).push(r.t); };
+  for (const r of normal) {
+    if (basePitch !== null && r.pitch !== null && r.pitch - basePitch >= 8) mark("head_down", r);
+    if (basePitch !== null && r.pitch !== null && basePitch - r.pitch >= 8) mark("head_raised", r);
+    if (typeof r.gazeRel === "number" && r.gazeRel >= 20) mark("eyes_off_screen", r);
+    if (r.fidget >= 60 && !r.tap) mark("large_movement", r);
+    if (typeof r.closed === "number" && r.closed >= 0.9) mark("blink_tracker_stuck", r);
+  }
+  // No blinks for 40s+ while the face was being tracked
+  let run = [];
+  const flushRun = () => { if (run.length >= 4) for (const t of run) (byType.no_blinks = byType.no_blinks || []).push(t); run = []; };
+  for (const r of timeline) {
+    if (!r.lost && r.blinks === 0 && (r.frames ? r.n / r.frames >= 0.7 : true) && (run.length === 0 || r.t - run[run.length - 1] === 10)) run.push(r.t);
+    else { flushRun(); if (!r.lost && r.blinks === 0 && (r.frames ? r.n / r.frames >= 0.7 : true)) run = [r.t]; }
+  }
+  flushRun();
+  const details = {
+    head_down: "Head dropped sharply: looking down (possible phone or other device)",
+    head_raised: "Head raised sharply, or the device was moved",
+    eyes_off_screen: "Eyes drifted away from the screen (compared with this person's own start)",
+    large_movement: "Large movement: repositioned or shifted a lot",
+    blink_tracker_stuck: "Blink tracker may have been stuck on 'closed' here, so blinks are probably undercounted",
+    no_blinks: "No blinks detected: very focused, or the tracker missed them",
+  };
+  for (const [type, times] of Object.entries(byType)) {
+    times.sort((x, y) => x - y);
+    let start = times[0], prev = times[0];
+    for (let i = 1; i <= times.length; i++) {
+      if (i === times.length || times[i] - prev > 10) { add(start, prev - start + 10, type, details[type]); start = times[i]; }
+      prev = times[i];
+    }
+  }
+
+  // Banner outcomes
+  for (let i = 0; i < evs.length; i++) {
+    if (evs[i].type !== "triggered_distraction_shown") continue;
+    const t0 = evs[i].atSec;
+    const next = evs.slice(i + 1).find((e) => e.type === "triggered_distraction_shown");
+    const window = evs.slice(i + 1, next ? evs.indexOf(next) : evs.length);
+    const resp = window.find((e) => e.type.startsWith("triggered_distraction_response_"));
+    const sound = window.find((e) => e.type.startsWith("banner_sound_")) || evs.slice(i, i + 3).find((e) => e.type.startsWith("banner_sound_"));
+    const soundTxt = sound ? (sound.type === "banner_sound_played" ? "chime played" : "chime " + sound.type.replace("banner_sound_", "")) : "no sound info";
+    add(t0, null, "banner", resp
+      ? "Notification banner shown; answered '" + resp.type.replace("triggered_distraction_response_", "") + "' " + (resp.atSec - t0) + "s later (" + soundTxt + ")"
+      : "Notification banner shown; no answer recorded (" + soundTxt + ")");
+  }
+
+  if (endReason === "stopped_by_user" && durationSec < maxSec - 5) add(durationSec, null, "ended_early", "Stopped early at " + fmtClock(durationSec) + " of " + fmtClock(maxSec));
+  if (camLost !== null) add(camLost, null, "camera_lost", "Camera feed ended by itself (another app took it, or permission was removed)");
+
+  events.sort((x, y) => x.t - y.t);
+  const kept = events.slice(0, 30);
+
+  let coverageTxt = "";
+  const withFrames = timeline.filter((r) => r.frames);
+  if (withFrames.length) {
+    const cov = withFrames.reduce((s, r) => s + r.n, 0) / withFrames.reduce((s, r) => s + r.frames, 0);
+    coverageTxt = " Face visible " + Math.round(cov * 100) + "% of the time.";
+  }
+  const head = (device === "mobile" ? "Mobile" : device === "desktop" ? "Desktop" : "Device unknown") + ", " + taskType + " session, " +
+    fmtClock(durationSec) + " of " + fmtClock(maxSec) + (endReason === "stopped_by_user" && durationSec < maxSec - 5 ? " (stopped early)." : ".") + coverageTxt;
+  const lines = kept.map((e) => "- " + fmtClock(e.t) + (e.dur ? " (" + e.dur + "s)" : "") + ": " + e.detail);
+  const notable = kept.filter((e) => !["banner", "ended_early"].includes(e.type));
+  const text = head + "\n" + (lines.length ? lines.join("\n") : "No notable events.") +
+    (notable.length === 0 ? (kept.some((e) => e.type === "banner") ? "\nNo interruptions detected apart from the banners." : "\nNo interruptions detected.") : "");
+  return { text, events: kept };
+}
+
 function updateTimerDisplay() {
   const elapsedSec = (performance.now() - sessionStartMs) / 1000;
   const m = Math.floor(elapsedSec / 60);
@@ -480,6 +603,7 @@ function detectFrame() {
   const now = performance.now();
   const frameDeltaMs = lastFrameTimestamp ? now - lastFrameTimestamp : 0;
   lastFrameTimestamp = now;
+  if (frameDeltaMs > 2000) noFaceStartMs = null; // frames paused (page hidden) — do not count the gap as "face lost"
 
   const result = faceLandmarker.detectForVideo(video, now);
   framesProcessed += 1;
@@ -489,6 +613,13 @@ function detectFrame() {
   const faceFound = result.faceLandmarks && result.faceLandmarks.length > 0;
 
   if (faceFound) {
+    if (noFaceStartMs !== null) {
+      const lostMs = now - noFaceStartMs;
+      if (lostMs >= 3000) {
+        faceLostSpans.push({ startSec: Math.round((noFaceStartMs - sessionStartMs) / 1000), durSec: Math.round(lostMs / 1000) });
+      }
+      noFaceStartMs = null;
+    }
     consecutiveNoFaceFrames = 0;
     faceDetectedDurationMs += frameDeltaMs;
 
@@ -501,6 +632,7 @@ function detectFrame() {
     drawSimpleOverlay(landmarks);
     sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
   } else {
+    if (noFaceStartMs === null) noFaceStartMs = now;
     consecutiveNoFaceFrames += 1;
     if (consecutiveNoFaceFrames >= NO_FACE_SUSTAINED_THRESHOLD) {
       animateValueUpdate(gazeValueEl, "--");
@@ -745,6 +877,12 @@ async function endSession(reason = "unknown") {
   const headDropAngle = Math.round(average(headAngleSamples.map((h) => h.pitch)) * 10) / 10;
   const fidgetScore = Math.round(combinedVariance * 10) / 10;
 
+  if (noFaceStartMs !== null && performance.now() - noFaceStartMs >= 3000) {
+    faceLostSpans.push({ startSec: Math.round((noFaceStartMs - sessionStartMs) / 1000), durSec: Math.round((performance.now() - noFaceStartMs) / 1000) });
+  }
+  noFaceStartMs = null;
+
+  const builtTimeline = buildTimeline();
   const summary = {
     durationSec: Math.round(durationSec),
     blinkCount,
@@ -753,7 +891,7 @@ async function endSession(reason = "unknown") {
     postureStabilityScore,
     headDropAngle,
     fidgetScore,
-    timeline: buildTimeline(),
+    timeline: builtTimeline,
     perf: {
       modelLoadMs,
       delegate: modelDelegate,
@@ -764,6 +902,18 @@ async function endSession(reason = "unknown") {
       ...(cameraLostAtSec !== null ? { cameraLostAtSec } : {}),
     },
   };
+
+  // Plain-language description + key moments. Must never block the results screen.
+  try {
+    const notes = buildSessionNotes({
+      deviceType, taskType: selectedTaskType, durationSec: Math.round(durationSec), maxSec: maxSessionSec(),
+      endReason: sessionEndReason, timeline: builtTimeline, distractionEvents, faceLostSpans, cameraLostAtSec,
+    });
+    summary.sessionNotes = notes.text;
+    summary.keyEvents = notes.events;
+  } catch (e) {
+    console.warn("Could not build session notes:", e);
+  }
 
   lastSessionSummary = summary;
   showResults(summary);
