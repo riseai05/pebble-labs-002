@@ -10,7 +10,7 @@ import {
   FaceLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-import { makeBlinkDetector } from "./blink.js";
+import { makeBlinkDetector, makeEarClosure, eyeAspectRatio } from "./blink.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
 const WORK_SESSION_SECONDS = 600; // 10 minutes
@@ -76,6 +76,11 @@ let currentSessionId = null;
 let sessionSavePromise = null;
 let blinkCountOld = 0; // shadow count from the old fixed-threshold method
 let blinkDetector = makeBlinkDetector();
+let earClosure = makeEarClosure();
+let earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
+let blinkCountEar = 0; // what the eyelid-shape signal alone counted (comparison only for now)
+let blinkTrace = { t: [], bs: [], ear: [] }; // raw numeric eyelid signals per frame (numbers only, no video)
+const BLINK_TRACE_MAX_FRAMES = 12000;
 let eyesCurrentlyClosed = false;
 let lastBlinkTimestamp = 0;
 let gazeSamples = [];
@@ -263,6 +268,10 @@ async function startSession() {
   blinkCount = 0;
   blinkCountOld = 0;
   blinkDetector = makeBlinkDetector();
+  earClosure = makeEarClosure();
+  earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
+  blinkCountEar = 0;
+  blinkTrace = { t: [], bs: [], ear: [] };
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];
@@ -669,7 +678,7 @@ function detectFrame() {
     const landmarks = result.faceLandmarks[0];
     const blendshapes = result.faceBlendshapes?.[0]?.categories ?? [];
 
-    processBlink(blendshapes);
+    processBlink(blendshapes, landmarks);
     processGaze(blendshapes);
     processHeadAngle(landmarks);
     drawSimpleOverlay(landmarks);
@@ -692,7 +701,7 @@ function getBlendshapeScore(categories, name) {
   return found ? found.score : 0;
 }
 
-function processBlink(blendshapes) {
+function processBlink(blendshapes, landmarks) {
   const left = getBlendshapeScore(blendshapes, "eyeBlinkLeft");
   const right = getBlendshapeScore(blendshapes, "eyeBlinkRight");
   const avgBlink = (left + right) / 2;
@@ -728,6 +737,15 @@ function processBlink(blendshapes) {
   bk2.noise = blinkDetector.noise;
   if (r.baseline !== null && r.baseline !== undefined) { bk2.baseSum += r.baseline; bk2.baseN += 1; }
   if (r.longClosure) bk2.longC += 1;
+  // Second signal: eyelid shape from the face-mesh points (recorded alongside, not yet used for the count)
+  const ear = eyeAspectRatio(landmarks, video.videoWidth || 1, video.videoHeight || 1);
+  const closure = earClosure.update(ear);
+  if (closure !== null && earDetector.update(closure, now).blink) { blinkCountEar += 1; bk2.blinksEar = (bk2.blinksEar || 0) + 1; }
+  if (sessionStartMs && blinkTrace.t.length < BLINK_TRACE_MAX_FRAMES) {
+    blinkTrace.t.push(Math.round(now - sessionStartMs));
+    blinkTrace.bs.push(Math.round(avgBlink * 1000));
+    blinkTrace.ear.push(ear === null ? null : Math.round(ear * 1000));
+  }
   if (r.blink) {
     blinkCount += 1;
     bk2.blinks += 1;
@@ -803,6 +821,7 @@ function buildTimeline() {
       row.bMean = r2(b.bSum / b.bN);
       row.bMax = r2(b.bMax);               // highest eyelid score — if this never nears 0.5, blinks are being missed
       row.closed = r2(b.closedFrames / b.bN); // share of frames the OLD fixed-threshold method believed eyes were closed (near 1 = it was stuck)
+      row.blinksEar = b.blinksEar || 0;       // eyelid-shape signal count in this chunk (comparison only)
       row.blinksOld = b.blinksOld;            // what the old method counted in this chunk (comparison only)
       if (b.baseN > 0) row.base = r2(b.baseSum / b.baseN); // this person's learned open-eye level (rises when looking down)
       row.bq = r2(b.noise);                   // wobble of the eyelid signal: high = dim light / bad angle, blink count may be low
@@ -953,6 +972,7 @@ async function endSession(reason = "unknown") {
     headDropAngle,
     fidgetScore,
     timeline: builtTimeline,
+    blinkTrace,
     perf: {
       modelLoadMs,
       delegate: modelDelegate,
@@ -961,6 +981,7 @@ async function endSession(reason = "unknown") {
       cameraVisible: selectedTaskType === "work",
       blinkMethod: "relative-v1",
       blinkCountOld, // what the old fixed-threshold method counted (comparison only)
+      blinkCountEar, // what the eyelid-shape signal alone counted (comparison only)
       blinkLongClosures: blinkDetector.longClosures,
       blinkNoise: Math.round(blinkDetector.noise * 1000) / 1000, // work mode shows the camera view; read mode hides it
       endReason: sessionEndReason,
@@ -1102,6 +1123,10 @@ function resetToLanding() {
   blinkCount = 0;
   blinkCountOld = 0;
   blinkDetector = makeBlinkDetector();
+  earClosure = makeEarClosure();
+  earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
+  blinkCountEar = 0;
+  blinkTrace = { t: [], bs: [], ear: [] };
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];

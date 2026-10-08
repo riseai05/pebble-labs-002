@@ -28,6 +28,7 @@ export default async function handler(req, res) {
     perf,
     sessionNotes,
     keyEvents,
+    blinkTrace,
     taskType,
     deviceType,
     durationSec,
@@ -120,6 +121,7 @@ export default async function handler(req, res) {
     if (perf && typeof perf === "object") extras.perf = perf;
     if (typeof sessionNotes === "string" && sessionNotes) extras.session_notes = sessionNotes.slice(0, 4000);
     if (Array.isArray(keyEvents) && keyEvents.length) extras.key_events = keyEvents;
+    if (blinkTrace && Array.isArray(blinkTrace.t) && blinkTrace.t.length && blinkTrace.t.length <= 12000) extras.blink_trace = blinkTrace;
 
     let response = await insertRow({ ...row, ...extras });
     if (!response.ok && Object.keys(extras).length) {

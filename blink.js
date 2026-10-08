@@ -85,3 +85,42 @@ export function makeBlinkDetector(opts = {}) {
 
   return { update, get baseline() { return baseline; }, get longClosures() { return longClosures; }, get noise() { return noise; }, get inBlink() { return inBlink; } };
 }
+
+// ---- Eyelid-shape signal -----------------------------------------------------
+// A second, independent way to see a blink: measure the gap between the upper and
+// lower eyelid points on the face mesh, relative to the eye's width (the classic
+// "eye aspect ratio"). Turned into a 0..1 "closure" score relative to this person's
+// own open-eye level, so it can feed the same relative detector.
+const EYE_RIGHT = { outer: 33, inner: 133, pairs: [[160, 144], [159, 145], [158, 153]] };
+const EYE_LEFT = { outer: 263, inner: 362, pairs: [[385, 380], [386, 374], [387, 373]] };
+
+function eyeRatio(lm, eye, w, h) {
+  const d = (a, b) => Math.hypot((lm[a].x - lm[b].x) * w, (lm[a].y - lm[b].y) * h);
+  const width = d(eye.outer, eye.inner);
+  if (!width) return null;
+  const v = eye.pairs.reduce((s, [a, b]) => s + d(a, b), 0) / eye.pairs.length;
+  return v / width;
+}
+
+export function eyeAspectRatio(lm, w, h) {
+  if (!lm || lm.length < 400) return null;
+  const r = eyeRatio(lm, EYE_RIGHT, w, h);
+  const l = eyeRatio(lm, EYE_LEFT, w, h);
+  if (r === null || l === null) return null;
+  return (r + l) / 2;
+}
+
+export function makeEarClosure() {
+  let open = null;
+  return {
+    // returns closure 0 (fully open for this person) .. 1 (closed)
+    update(ear) {
+      if (ear === null || ear === undefined) return null;
+      if (open === null) open = ear;
+      if (ear > open) open += (ear - open) * 0.2;       // wider than thought: learn quickly
+      else open -= (open - ear) * 0.004;                 // narrower (looking down): drift slowly
+      return Math.max(0, Math.min(1, 1 - ear / open));
+    },
+    get open() { return open; },
+  };
+}
