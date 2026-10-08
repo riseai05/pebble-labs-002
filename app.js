@@ -11,6 +11,7 @@ import {
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 import { makeBlinkDetector, makeEarClosure, eyeAspectRatio } from "./blink.js";
+import { poseFromMatrix, makePitchOrienter, faceSizeFrac, frameQuality } from "./pose.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
 const WORK_SESSION_SECONDS = 600; // 10 minutes
@@ -79,7 +80,17 @@ let blinkDetector = makeBlinkDetector();
 let earClosure = makeEarClosure();
 let earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
 let blinkCountEar = 0; // what the eyelid-shape signal alone counted (comparison only for now)
-let blinkTrace = { t: [], bs: [], ear: [] }; // raw numeric eyelid signals per frame (numbers only, no video)
+let blinkTrace = { t: [], bs: [], ear: [], ld: [] }; // raw numeric eyelid signals per frame (numbers only, no video); ld = eyes-look-down score
+// Shadow detector on a head-down-compensated eyelid score: eyelids drop when the EYES look down,
+// which the raw blink score mistakes for closing. Comparison only until real sessions show which is closer to truth.
+const COMP_K = 0.5;
+let compDetector = makeBlinkDetector();
+let blinkCountComp = 0;
+let lastLookDown = null;
+function newPoseState() {
+  return { orienter: makePitchOrienter(), baseRaw: [], base: null, ok: 0, bad: 0, rel: [], quality: [] };
+}
+let poseState = newPoseState();
 const BLINK_TRACE_MAX_FRAMES = 12000;
 let eyesCurrentlyClosed = false;
 let lastBlinkTimestamp = 0;
@@ -150,7 +161,7 @@ async function loadFaceLandmarker() {
         delegate,
       },
       outputFaceBlendshapes: true,
-      outputFacialTransformationMatrixes: false,
+      outputFacialTransformationMatrixes: true, // real 3D head pose (pose.js)
       runningMode: "VIDEO",
       numFaces: 1,
     });
@@ -271,7 +282,11 @@ async function startSession() {
   earClosure = makeEarClosure();
   earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
   blinkCountEar = 0;
-  blinkTrace = { t: [], bs: [], ear: [] };
+  blinkTrace = { t: [], bs: [], ear: [], ld: [] };
+  compDetector = makeBlinkDetector();
+  blinkCountComp = 0;
+  lastLookDown = null;
+  poseState = newPoseState();
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];
@@ -544,8 +559,16 @@ function buildSessionNotes(ctx) {
   const byType = {};
   const mark = (type, r) => { (byType[type] = byType[type] || []).push(r.t); };
   for (const r of normal) {
-    if (basePitch !== null && r.pitch !== null && r.pitch - basePitch >= 8) mark("head_down", r);
-    if (basePitch !== null && r.pitch !== null && basePitch - r.pitch >= 8) mark("head_raised", r);
+    if (typeof r.pitchRel === "number") {
+      // real 3D pitch vs the person's own start, ignoring chunks where the face tracking was low-trust
+      if (!(r.q < 0.4)) {
+        if (r.pitchRel >= 10) mark("head_down", r);
+        if (r.pitchRel <= -10) mark("head_raised", r);
+      }
+    } else {
+      if (basePitch !== null && r.pitch !== null && r.pitch - basePitch >= 8) mark("head_down", r);
+      if (basePitch !== null && r.pitch !== null && basePitch - r.pitch >= 8) mark("head_raised", r);
+    }
     if (typeof r.gazeRel === "number" && r.gazeRel >= 20) mark("eyes_off_screen", r);
     if (r.fidget >= 60 && !r.tap) mark("large_movement", r);
   }
@@ -613,6 +636,13 @@ function buildSessionNotes(ctx) {
   const noisyShare = rows.length ? rows.filter((r) => r.bq >= 0.05).length / rows.length : 0;
   const longC = rows.reduce((a, r) => a + (r.longC || 0), 0);
   const q = [];
+  const fpsRows = timeline.filter((r) => !r.lost && typeof r.fps === "number" && r.fps > 0).map((r) => r.fps).sort((a, b) => a - b);
+  if (fpsRows.length && fpsRows[Math.floor(fpsRows.length / 2)] < 15) q.push("tracker ran at about " + Math.round(fpsRows[Math.floor(fpsRows.length / 2)]) + " frames/s, so quick blinks can be missed");
+  const qRows = timeline.filter((r) => !r.lost && typeof r.qLow === "number");
+  if (qRows.length) {
+    const lowShare = qRows.reduce((a, r) => a + r.qLow, 0) / qRows.length;
+    if (lowShare >= 0.25) q.push("eye readings were low-confidence for " + Math.round(lowShare * 100) + "% of the session (head turned or tilted, small face, or eyes looking down)");
+  }
   if (rows.length && noisyShare >= 0.25) q.push("blink signal was noisy in " + Math.round(noisyShare * 100) + "% of the session (dim light or head angle), so the blink count may be low");
   if (longC >= 3) q.push("eyes looked closed or lids dropped for longer than a blink " + longC + " times (looking down or eyes shut)");
   if (typeof coverageTxt === "string" && coverageTxt && /Face visible (\d+)%/.test(coverageTxt) && Number(RegExp.$1) < 70) q.push("face was visible less than 70% of the time");
@@ -681,6 +711,7 @@ function detectFrame() {
     processBlink(blendshapes, landmarks);
     processGaze(blendshapes);
     processHeadAngle(landmarks);
+    processPose(landmarks, result.facialTransformationMatrixes?.[0]?.data);
     drawSimpleOverlay(landmarks);
     sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
   } else {
@@ -705,6 +736,9 @@ function processBlink(blendshapes, landmarks) {
   const left = getBlendshapeScore(blendshapes, "eyeBlinkLeft");
   const right = getBlendshapeScore(blendshapes, "eyeBlinkRight");
   const avgBlink = (left + right) / 2;
+  const lookDown = (getBlendshapeScore(blendshapes, "eyeLookDownLeft") + getBlendshapeScore(blendshapes, "eyeLookDownRight")) / 2;
+  lastLookDown = lookDown;
+  currentBucket().ld.push(lookDown);
 
   // Diagnostics only (never changes counting): lets us see, per 10s chunk, whether
   // a person's eyelid score ever crosses the threshold or gets stuck "closed".
@@ -745,6 +779,11 @@ function processBlink(blendshapes, landmarks) {
     blinkTrace.t.push(Math.round(now - sessionStartMs));
     blinkTrace.bs.push(Math.round(avgBlink * 1000));
     blinkTrace.ear.push(ear === null ? null : Math.round(ear * 1000));
+    blinkTrace.ld.push(Math.round(lookDown * 1000));
+  }
+  if (compDetector.update(Math.max(0, avgBlink - COMP_K * lookDown), now).blink) {
+    blinkCountComp += 1;
+    bk2.blinksComp = (bk2.blinksComp || 0) + 1;
   }
   if (r.blink) {
     blinkCount += 1;
@@ -763,6 +802,7 @@ function currentBucket() {
       // blink-score diagnostics: the raw eyelid-closure score the blink threshold is compared against
       bMin: Infinity, bMax: -Infinity, bSum: 0, bN: 0, closedFrames: 0,
       frames: 0, // every frame the model ran this chunk, with or without a face
+      p3: [], yawAbs: [], q: [], size: [], ld: [], gH: [], gV: [], // 3D head pose, tracking quality, face size, eyes-look-down, horizontal/vertical gaze
     };
   }
   return timelineBuckets[idx];
@@ -789,6 +829,20 @@ function buildTimeline() {
     if (timelineBuckets[i]) baselineFrames.push(...timelineBuckets[i].gaze);
   }
   const baseline = baselineFrames.length >= TIMELINE_MIN_FRAMES ? average(baselineFrames) : null;
+
+  // Same idea for the real 3D pitch, and for horizontal/vertical gaze: personal baseline = first 30s.
+  const sign = poseState.orienter.sign;
+  const baseP3 = [], baseGH = [], baseGV = [];
+  for (let i = 0; i < Math.ceil(TIMELINE_BASELINE_SEC / TIMELINE_BUCKET_SEC); i++) {
+    if (!timelineBuckets[i]) continue;
+    baseP3.push(...timelineBuckets[i].p3);
+    baseGH.push(...timelineBuckets[i].gH);
+    baseGV.push(...timelineBuckets[i].gV);
+  }
+  const base3 = baseP3.length >= TIMELINE_MIN_FRAMES ? sign * average(baseP3) : null;
+  const baseH = baseGH.length >= TIMELINE_MIN_FRAMES ? average(baseGH) : null;
+  const baseV = baseGV.length >= TIMELINE_MIN_FRAMES ? average(baseGV) : null;
+  const elapsedNow = (performance.now() - sessionStartMs) / 1000;
 
   const out = [];
   for (let i = 0; i < timelineBuckets.length; i++) {
@@ -827,6 +881,22 @@ function buildTimeline() {
       row.bq = r2(b.noise);                   // wobble of the eyelid signal: high = dim light / bad angle, blink count may be low
       if (b.longC) row.longC = b.longC;       // eyes held shut / lids dropped longer than a blink
     }
+    {
+      const r2 = (x) => Math.round(x * 100) / 100;
+      const chunkSec = Math.max(1, Math.min(TIMELINE_BUCKET_SEC, elapsedNow - i * TIMELINE_BUCKET_SEC));
+      row.fps = round1((b.frames || 0) / chunkSec);   // model speed in this chunk: a blink is only a few frames long, so low fps = missed blinks
+      if (b.p3.length) {
+        row.pitch3 = round1(sign * average(b.p3));     // REAL 3D head pitch (positive = head down); the older `pitch` above is the 2D proxy
+        row.pitchRel = base3 === null ? null : round1(sign * average(b.p3) - base3); // vs this person's own first 30s
+        row.yawAbs = round1(average(b.yawAbs));        // how far the head is turned sideways
+      }
+      if (b.ld.length) row.ld = r2(average(b.ld));     // eyes-look-down score: when high, eyelids droop and blink readings are shaky
+      if (b.size.length) row.size = r2(average(b.size)); // face size (inter-eye distance / frame width)
+      if (b.q.length) { row.q = r2(average(b.q)); row.qLow = r2(b.q.filter((x) => x < 0.5).length / b.q.length); } // tracking trust 0..1, and share of frames below 0.5
+      if (b.gH.length && baseH !== null) row.gHrel = round1((average(b.gH) - baseH) * 100); // sideways look-away vs own baseline (points)
+      if (b.gV.length && baseV !== null) row.gVrel = round1((average(b.gV) - baseV) * 100); // up/down look-away vs own baseline (points)
+      if (b.blinksComp) row.blinksComp = b.blinksComp; // head-down-compensated blink count (comparison only)
+    }
     if (b.tap) row.tap = true; // a screen tap happened here — treat fidget with caution
     out.push(row);
   }
@@ -844,6 +914,11 @@ function processGaze(blendshapes) {
   );
   gazeSamples.push(maxDeviation);
   currentBucket().gaze.push(maxDeviation);
+  // Split the same signal into horizontal (in/out) and vertical (up/down) so "eyes on a phone below the camera"
+  // (vertical) can be told apart from "eyes wandered sideways" (horizontal).
+  const gb = currentBucket();
+  gb.gH.push(Math.max(...["eyeLookInLeft", "eyeLookOutLeft", "eyeLookInRight", "eyeLookOutRight"].map((n) => getBlendshapeScore(blendshapes, n)), 0));
+  gb.gV.push(Math.max(...["eyeLookUpLeft", "eyeLookDownLeft", "eyeLookUpRight", "eyeLookDownRight"].map((n) => getBlendshapeScore(blendshapes, n)), 0));
 
   const recentAvg = average(gazeSamples.slice(-30));
   animateValueUpdate(gazeValueEl, recentAvg < 0.25 ? "Steady" : recentAvg < 0.5 ? "Drifting" : "Away");
@@ -897,6 +972,35 @@ function processHeadAngle(landmarks) {
     variance(recent.map((h) => h.yaw)) +
     variance(recent.map((h) => h.pitch));
   animateValueUpdate(postureValueEl, tiltVariance < 10 ? "Stable" : tiltVariance < 40 ? "Shifting" : "Restless");
+}
+
+// Real 3D head pose from MediaPipe's face transformation matrix, plus a per-frame trust score for the eye signals.
+// If the matrix is missing or unreadable we count it and carry on with the old 2D proxy (nothing breaks).
+function processPose(landmarks, matrixData) {
+  const ps = poseState;
+  const bk = currentBucket();
+  const size = faceSizeFrac(landmarks, video.videoWidth || 1, video.videoHeight || 1);
+  if (size !== null) bk.size.push(size);
+  const pose = poseFromMatrix(matrixData);
+  if (!pose) { ps.bad += 1; return; }
+  ps.ok += 1;
+  if (typeof smoothedPitch === "number") ps.orienter.update(pose.pitch, smoothedPitch);
+  const sign = ps.orienter.sign;
+  const pitchDown = sign * pose.pitch; // positive = head tilted down
+  bk.p3.push(pose.pitch); // raw; the final sign is applied when the timeline is built
+  bk.yawAbs.push(Math.abs(pose.yaw));
+  const elapsedSec = (performance.now() - sessionStartMs) / 1000;
+  if (ps.base === null) {
+    if (elapsedSec <= TIMELINE_BASELINE_SEC) ps.baseRaw.push(pitchDown);
+    else if (ps.baseRaw.length >= 30) {
+      const sorted = ps.baseRaw.slice().sort((a, b) => a - b);
+      ps.base = sorted[Math.floor(sorted.length / 2)];
+    }
+  }
+  const pitchRel = ps.base === null ? undefined : pitchDown - ps.base;
+  if (pitchRel !== undefined) ps.rel.push(pitchRel);
+  const q = frameQuality({ yaw: pose.yaw, pitchRel, size: size === null ? undefined : size, lookDown: lastLookDown === null ? undefined : lastLookDown });
+  if (q !== null) { bk.q.push(q); ps.quality.push(q); }
 }
 
 function drawSimpleOverlay(landmarks) {
@@ -982,6 +1086,22 @@ async function endSession(reason = "unknown") {
       blinkMethod: "relative-v1",
       blinkCountOld, // what the old fixed-threshold method counted (comparison only)
       blinkCountEar, // what the eyelid-shape signal alone counted (comparison only)
+      blinkCountComp, // what the head-down-compensated eyelid score counted (comparison only)
+      poseV2: (() => {
+        const ps = poseState;
+        const sorted = ps.rel.slice().sort((a, b) => a - b);
+        const pct = (p) => (sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] * 10) / 10 : null);
+        const share = (fn) => (ps.rel.length ? Math.round((ps.rel.filter(fn).length / ps.rel.length) * 100) / 100 : null);
+        return {
+          matrixOk: ps.ok, matrixBad: ps.bad,                 // frames where the 3D pose could / could not be read
+          pitchSign: ps.orienter.sign, signConfident: ps.orienter.confident,
+          pitchBaseline: ps.base === null ? null : Math.round(ps.base * 10) / 10,
+          pitchP10: pct(0.1), pitchP50: pct(0.5), pitchP90: pct(0.9), // spread of head pitch vs own baseline (degrees)
+          headDown10Share: share((x) => x >= 10), headDown20Share: share((x) => x >= 20), headUp10Share: share((x) => x <= -10),
+          qualityMean: ps.quality.length ? Math.round((ps.quality.reduce((a, b) => a + b, 0) / ps.quality.length) * 100) / 100 : null,
+          lowQualityShare: ps.quality.length ? Math.round((ps.quality.filter((x) => x < 0.5).length / ps.quality.length) * 100) / 100 : null,
+        };
+      })(),
       blinkLongClosures: blinkDetector.longClosures,
       blinkNoise: Math.round(blinkDetector.noise * 1000) / 1000, // work mode shows the camera view; read mode hides it
       endReason: sessionEndReason,
@@ -1126,7 +1246,11 @@ function resetToLanding() {
   earClosure = makeEarClosure();
   earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
   blinkCountEar = 0;
-  blinkTrace = { t: [], bs: [], ear: [] };
+  blinkTrace = { t: [], bs: [], ear: [], ld: [] };
+  compDetector = makeBlinkDetector();
+  blinkCountComp = 0;
+  lastLookDown = null;
+  poseState = newPoseState();
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];
