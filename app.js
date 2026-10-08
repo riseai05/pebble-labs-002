@@ -10,15 +10,19 @@ import {
   FaceLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { makeBlinkDetector } from "./blink.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
 const WORK_SESSION_SECONDS = 600; // 10 minutes
 function maxSessionSec() {
   return selectedTaskType === "read" ? READ_SESSION_SECONDS : WORK_SESSION_SECONDS;
 }
+// Shadow detector (the old fixed-threshold method). It no longer drives the blink
+// count; it is kept only so each session records how the old method would have
+// counted, for comparison (blinkCountOld, per-chunk blinksOld, "closed" share).
 const BLINK_THRESHOLD = 0.5;
 const BLINK_MIN_INTERVAL_MS = 350;
-const BLINK_REOPEN_THRESHOLD = 0.35; // eyes must reopen past this before the next blink counts (stops flicker around 0.5, e.g. when looking down at a phone)
+const BLINK_REOPEN_THRESHOLD = 0.35;
 const NO_FACE_SUSTAINED_THRESHOLD = 8; // consecutive frames before we call it sustained, not a blip
 const SELF_REPORT_EVERY_SEC = 150; // every 2.5 min
 const IDLE_THRESHOLD_MS = 15000; // only tracked in "work" mode
@@ -67,7 +71,11 @@ let distractionTriggerTimeoutIds = [];
 let distractionFollowupTimeoutIds = [];
 let bannerHideTimeoutId = null;
 
-let blinkCount = 0;
+let blinkCount = 0; // from the per-person relative detector (blink.js)
+let currentSessionId = null;
+let sessionSavePromise = null;
+let blinkCountOld = 0; // shadow count from the old fixed-threshold method
+let blinkDetector = makeBlinkDetector();
 let eyesCurrentlyClosed = false;
 let lastBlinkTimestamp = 0;
 let gazeSamples = [];
@@ -253,6 +261,8 @@ async function startSession() {
   warmUpInfo = await warmUpTracking();
 
   blinkCount = 0;
+  blinkCountOld = 0;
+  blinkDetector = makeBlinkDetector();
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];
@@ -324,6 +334,11 @@ function attachDistractionListeners() {
   if (selectedTaskType === "work") {
     window.addEventListener("mousemove", resetIdleTimer);
     window.addEventListener("keydown", resetIdleTimer);
+    // Phones have no mouse or keyboard: touch and scroll count as activity too
+    window.addEventListener("touchstart", resetIdleTimer, { passive: true });
+    window.addEventListener("touchmove", resetIdleTimer, { passive: true });
+    window.addEventListener("scroll", resetIdleTimer, { passive: true });
+    window.addEventListener("pointerdown", resetIdleTimer, { passive: true });
     resetIdleTimer();
   }
 }
@@ -334,6 +349,10 @@ function detachDistractionListeners() {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.removeEventListener("mousemove", resetIdleTimer);
   window.removeEventListener("keydown", resetIdleTimer);
+  window.removeEventListener("touchstart", resetIdleTimer);
+  window.removeEventListener("touchmove", resetIdleTimer);
+  window.removeEventListener("scroll", resetIdleTimer);
+  window.removeEventListener("pointerdown", resetIdleTimer);
   clearTimeout(idleTimeoutId);
 }
 
@@ -520,7 +539,6 @@ function buildSessionNotes(ctx) {
     if (basePitch !== null && r.pitch !== null && basePitch - r.pitch >= 8) mark("head_raised", r);
     if (typeof r.gazeRel === "number" && r.gazeRel >= 20) mark("eyes_off_screen", r);
     if (r.fidget >= 60 && !r.tap) mark("large_movement", r);
-    if (typeof r.closed === "number" && r.closed >= 0.9) mark("blink_tracker_stuck", r);
   }
   // No blinks for 40s+ while the face was being tracked
   let run = [];
@@ -535,15 +553,24 @@ function buildSessionNotes(ctx) {
     head_raised: "Head raised sharply, or the device was moved",
     eyes_off_screen: "Eyes drifted away from the screen (compared with this person's own start)",
     large_movement: "Large movement: repositioned or shifted a lot",
-    blink_tracker_stuck: "Blink tracker may have been stuck on 'closed' here, so blinks are probably undercounted",
     no_blinks: "No blinks detected: very focused, or the tracker missed them",
   };
   for (const [type, times] of Object.entries(byType)) {
     times.sort((x, y) => x - y);
+    const spans = [];
     let start = times[0], prev = times[0];
     for (let i = 1; i <= times.length; i++) {
-      if (i === times.length || times[i] - prev > 10) { add(start, prev - start + 10, type, details[type]); start = times[i]; }
+      if (i === times.length || times[i] - prev > 10) { spans.push([start, prev - start + 10]); start = times[i]; }
       prev = times[i];
+    }
+    if (spans.length <= 2) {
+      for (const [st, du] of spans) add(st, du, type, details[type]);
+    } else {
+      // Repeated many times: one line with a count and total instead of a wall of lines
+      const total = spans.reduce((a, sp) => a + sp[1], 0);
+      const when = spans.slice(0, 4).map((sp) => fmtClock(sp[0])).join(", ") + (spans.length > 4 ? ", ..." : "");
+      const ev = { t: spans[0][0], dur: total, type, detail: details[type] + " — " + spans.length + " times, " + total + "s in total (at " + when + ")", count: spans.length };
+      events.push(ev);
     }
   }
 
@@ -573,11 +600,19 @@ function buildSessionNotes(ctx) {
     const cov = withFrames.reduce((s, r) => s + r.n, 0) / withFrames.reduce((s, r) => s + r.frames, 0);
     coverageTxt = " Face visible " + Math.round(cov * 100) + "% of the time.";
   }
+  const rows = timeline.filter((r) => !r.lost && typeof r.bq === "number");
+  const noisyShare = rows.length ? rows.filter((r) => r.bq >= 0.05).length / rows.length : 0;
+  const longC = rows.reduce((a, r) => a + (r.longC || 0), 0);
+  const q = [];
+  if (rows.length && noisyShare >= 0.25) q.push("blink signal was noisy in " + Math.round(noisyShare * 100) + "% of the session (dim light or head angle), so the blink count may be low");
+  if (longC >= 3) q.push("eyes looked closed or lids dropped for longer than a blink " + longC + " times (looking down or eyes shut)");
+  if (typeof coverageTxt === "string" && coverageTxt && /Face visible (\d+)%/.test(coverageTxt) && Number(RegExp.$1) < 70) q.push("face was visible less than 70% of the time");
+  const qualityTxt = "\nData quality: " + (q.length ? q.join("; ") + "." : "good.");
   const head = (device === "mobile" ? "Mobile" : device === "desktop" ? "Desktop" : "Device unknown") + ", " + taskType + " session, " +
     fmtClock(durationSec) + " of " + fmtClock(maxSec) + (endReason === "stopped_by_user" && durationSec < maxSec - 5 ? " (stopped early)." : ".") + coverageTxt;
   const lines = kept.map((e) => "- " + fmtClock(e.t) + (e.dur ? " (" + e.dur + "s)" : "") + ": " + e.detail);
   const notable = kept.filter((e) => !["banner", "ended_early"].includes(e.type));
-  const text = head + "\n" + (lines.length ? lines.join("\n") : "No notable events.") +
+  const text = head + qualityTxt + "\n" + (lines.length ? lines.join("\n") : "No notable events.") +
     (notable.length === 0 ? (kept.some((e) => e.type === "banner") ? "\nNo interruptions detected apart from the banners." : "\nNo interruptions detected.") : "");
   return { text, events: kept };
 }
@@ -673,17 +708,30 @@ function processBlink(blendshapes) {
     if (eyesCurrentlyClosed) bk.closedFrames += 1;
   }
 
+  const now = performance.now();
+
+  // Shadow (old) detector — comparison only.
   if (avgBlink > BLINK_THRESHOLD && !eyesCurrentlyClosed) {
     eyesCurrentlyClosed = true;
-    const now = performance.now();
     if (now - lastBlinkTimestamp > BLINK_MIN_INTERVAL_MS) {
       lastBlinkTimestamp = now;
-      blinkCount += 1;
-      currentBucket().blinks += 1;
-      animateValueUpdate(blinkValueEl, String(blinkCount));
+      blinkCountOld += 1;
+      currentBucket().blinksOld += 1;
     }
   } else if (avgBlink <= BLINK_REOPEN_THRESHOLD && eyesCurrentlyClosed) {
     eyesCurrentlyClosed = false;
+  }
+
+  // The real count: relative to this person's own open-eye level.
+  const r = blinkDetector.update(avgBlink, now);
+  const bk2 = currentBucket();
+  bk2.noise = blinkDetector.noise;
+  if (r.baseline !== null && r.baseline !== undefined) { bk2.baseSum += r.baseline; bk2.baseN += 1; }
+  if (r.longClosure) bk2.longC += 1;
+  if (r.blink) {
+    blinkCount += 1;
+    bk2.blinks += 1;
+    animateValueUpdate(blinkValueEl, String(blinkCount));
   }
 }
 
@@ -692,7 +740,8 @@ function currentBucket() {
   const idx = Math.max(0, Math.floor((performance.now() - sessionStartMs) / 1000 / TIMELINE_BUCKET_SEC));
   if (!timelineBuckets[idx]) {
     timelineBuckets[idx] = {
-      gaze: [], blinks: 0, yaw: [], pitch: [], roll: [],
+      gaze: [], blinks: 0, blinksOld: 0, yaw: [], pitch: [], roll: [],
+      noise: 0, baseSum: 0, baseN: 0, longC: 0,
       // blink-score diagnostics: the raw eyelid-closure score the blink threshold is compared against
       bMin: Infinity, bMax: -Infinity, bSum: 0, bN: 0, closedFrames: 0,
       frames: 0, // every frame the model ran this chunk, with or without a face
@@ -753,7 +802,11 @@ function buildTimeline() {
       row.bMin = r2(b.bMin);               // lowest eyelid score (eyes open) — if this stays above ~0.35 blinks can get stuck "closed"
       row.bMean = r2(b.bSum / b.bN);
       row.bMax = r2(b.bMax);               // highest eyelid score — if this never nears 0.5, blinks are being missed
-      row.closed = r2(b.closedFrames / b.bN); // share of frames the tracker believed the eyes were closed (near 1 = stuck)
+      row.closed = r2(b.closedFrames / b.bN); // share of frames the OLD fixed-threshold method believed eyes were closed (near 1 = it was stuck)
+      row.blinksOld = b.blinksOld;            // what the old method counted in this chunk (comparison only)
+      if (b.baseN > 0) row.base = r2(b.baseSum / b.baseN); // this person's learned open-eye level (rises when looking down)
+      row.bq = r2(b.noise);                   // wobble of the eyelid signal: high = dim light / bad angle, blink count may be low
+      if (b.longC) row.longC = b.longC;       // eyes held shut / lids dropped longer than a blink
     }
     if (b.tap) row.tap = true; // a screen tap happened here — treat fidget with caution
     out.push(row);
@@ -905,7 +958,11 @@ async function endSession(reason = "unknown") {
       delegate: modelDelegate,
       ...(warmUpInfo || {}),
       avgFps: durationSec > 0 ? Math.round((framesProcessed / durationSec) * 10) / 10 : null,
-      cameraVisible: selectedTaskType === "work", // work mode shows the camera view; read mode hides it
+      cameraVisible: selectedTaskType === "work",
+      blinkMethod: "relative-v1",
+      blinkCountOld, // what the old fixed-threshold method counted (comparison only)
+      blinkLongClosures: blinkDetector.longClosures,
+      blinkNoise: Math.round(blinkDetector.noise * 1000) / 1000, // work mode shows the camera view; read mode hides it
       endReason: sessionEndReason,
       endedAtSec: Math.round(durationSec),
       ...(cameraLostAtSec !== null ? { cameraLostAtSec } : {}),
@@ -931,8 +988,10 @@ async function endSession(reason = "unknown") {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-  // Logging is deferred until the exit survey is submitted (see submitExitSurvey)
-  // so the survey answers travel with the same session row instead of a second write.
+  // Save the session right now, so it is never lost if the tab is closed before the
+  // exit survey. The survey answers are added to the same row later (submitExitSurvey).
+  currentSessionId = crypto.randomUUID();
+  sessionSavePromise = logSessionToSupabase(summary, null, currentSessionId);
 }
 
 function submitExitSurvey() {
@@ -945,20 +1004,35 @@ function submitExitSurvey() {
     wouldUse: wouldUseInput ? wouldUseInput.value : null,
   };
 
-  logSessionToSupabase(lastSessionSummary, exitSurveyAnswers);
+  const sid = currentSessionId;
+  if (sid) {
+    (sessionSavePromise || Promise.resolve()).then(() => saveSurveyToSupabase(sid, exitSurveyAnswers));
+  }
 
   exitSurvey.classList.add("hidden");
   postSurveyThanks.classList.remove("hidden");
   restartBtn.classList.remove("hidden");
 }
 
-async function logSessionToSupabase(summary, exitSurveyAnswers) {
+async function saveSurveyToSupabase(sessionId, exitSurveyAnswers) {
+  try {
+    await fetch("/api/log-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "survey", sessionId, exitSurvey: exitSurveyAnswers }),
+    });
+  } catch (err) {
+    console.warn("Saving survey failed (session itself was already saved):", err);
+  }
+}
+
+async function logSessionToSupabase(summary, exitSurveyAnswers, sessionId) {
   try {
     await fetch("/api/log-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sessionId: crypto.randomUUID(),
+        sessionId,
         nickname: sessionNickname,
         timestamp: new Date().toISOString(),
         taskType: selectedTaskType,
@@ -1004,6 +1078,8 @@ function showResults(summary) {
 }
 
 function resetToLanding() {
+  currentSessionId = null;
+  sessionSavePromise = null;
   showScreen("landing");
   startBtn.disabled = false;
   stopBtn.classList.add("hidden");
@@ -1024,6 +1100,8 @@ function resetToLanding() {
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
   blinkCount = 0;
+  blinkCountOld = 0;
+  blinkDetector = makeBlinkDetector();
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];

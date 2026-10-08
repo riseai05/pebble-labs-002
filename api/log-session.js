@@ -47,6 +47,38 @@ export default async function handler(req, res) {
     return;
   }
 
+  // The session row is saved the moment a session ends. The exit survey, if the
+  // person fills it in, arrives later as a second request that only adds its
+  // answers to that same row (so closing the tab on the survey never loses data).
+  if (req.body && req.body.mode === "survey") {
+    if (!/^[0-9a-fA-F-]{36}$/.test(String(sessionId))) {
+      res.status(400).json({ error: "Bad sessionId" });
+      return;
+    }
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/sessions?session_id=eq.${sessionId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify({ exit_survey: exitSurvey || null }),
+      });
+      if (!r.ok) {
+        console.error("Supabase survey update failed:", r.status, await r.text());
+        res.status(502).json({ error: "Failed to save survey" });
+        return;
+      }
+      res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error("Unexpected error saving survey:", err);
+      res.status(500).json({ error: "Unexpected server error" });
+    }
+    return;
+  }
+
   try {
     const row = {
       session_id: sessionId,
