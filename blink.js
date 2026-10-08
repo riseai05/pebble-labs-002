@@ -28,7 +28,8 @@ export function makeBlinkDetector(opts = {}) {
   let peak = 0;
   let lastBlinkMs = -1e9;
   let longClosures = 0;
-  let noise = 0.02; // running typical wobble of the open-eye score; high = dim light / bad angle
+  let noise = 0.02; // running typical frame-to-frame wobble of the open-eye score; high = dim light / bad angle
+  let prev = null;
 
   // Returns { blink: boolean, longClosure: boolean, baseline }
   function update(score, nowMs) {
@@ -52,7 +53,13 @@ export function makeBlinkDetector(opts = {}) {
         blinkStartMs = nowMs;
         peak = score;
       } else {
-        noise += (Math.abs(score - baseline) - noise) * 0.03;
+        // Noise = frame-to-frame wobble, NOT distance from the baseline. (Measuring distance from the baseline
+        // made the "noise" explode every time the open-eye level shifted, e.g. when the head went down, which
+        // then demanded a huge jump to count a blink and froze the counter.)
+        if (prev !== null) {
+          const step = Math.abs(score - prev);
+          if (step < 0.25) noise += (step - noise) * 0.03; // big jumps are blinks / glitches, not wobble
+        }
         const k = score < baseline ? c.baselineDown : c.baselineUp;
         baseline += (score - baseline) * k;
       }
@@ -82,8 +89,10 @@ export function makeBlinkDetector(opts = {}) {
     out.baseline = baseline;
     return out;
   }
+  const rawUpdate = update;
+  function trackedUpdate(score, nowMs) { const r = rawUpdate(score, nowMs); prev = score; return r; }
 
-  return { update, get baseline() { return baseline; }, get longClosures() { return longClosures; }, get noise() { return noise; }, get inBlink() { return inBlink; } };
+  return { update: trackedUpdate, get baseline() { return baseline; }, get longClosures() { return longClosures; }, get noise() { return noise; }, get inBlink() { return inBlink; } };
 }
 
 // ---- Eyelid-shape signal -----------------------------------------------------
@@ -122,5 +131,79 @@ export function makeEarClosure() {
       return Math.max(0, Math.min(1, 1 - ear / open));
     },
     get open() { return open; },
+  };
+}
+
+// ---- Scale-free dip detector (works when the eyes sit half-closed) ----------
+// The relative detectors above need a fixed-size jump. With the head down and the eyes looking
+// at a phone, the eyelids stay half-closed, the open-eye level collapses, and a blink only adds a
+// small absolute step, so fixed jumps never fire. This one compares each value to the person's OWN
+// recent open level (a high percentile of the last few seconds): a blink is a quick dip to a fraction
+// of that level and back, whatever the level is. Used on the eyelid-shape ratio (EAR).
+export const DIP_DEFAULTS = {
+  windowMs: 2500,       // how far back "my open level" looks
+  pct: 0.8,             // open level = this percentile of the window (robust to blinks taking a minority of frames)
+  enterRatio: 0.62,     // a dip starts when the value falls below this fraction of the open level
+  exitRatio: 0.8,       // ...and ends when it climbs back above this fraction
+  maxMs: 1000,          // a dip longer than this is a long closure / posture change, not a blink
+  refractoryMs: 200,    // two blinks closer than this are one
+  minWindowFrames: 12,  // frames needed before judging
+  minOpen: 0.03,        // below this open level the signal is too small to judge
+};
+
+export function makeRatioDipDetector(opts = {}) {
+  const c = { ...DIP_DEFAULTS, ...opts };
+  let buf = [];
+  let inDip = false;
+  let start = 0;
+  let last = -1e9;
+  let longClosures = 0;
+  const level = () => {
+    const s = buf.map((b) => b.v).sort((a, b) => a - b);
+    return s[Math.min(s.length - 1, Math.floor(s.length * c.pct))];
+  };
+  return {
+    // returns { blink, longClosure }
+    update(v, nowMs) {
+      const out = { blink: false, longClosure: false };
+      if (v === null || v === undefined || !Number.isFinite(v)) return out;
+      buf.push({ t: nowMs, v });
+      while (buf.length && nowMs - buf[0].t > c.windowMs) buf.shift();
+      if (buf.length < c.minWindowFrames) return out;
+      const open = level();
+      if (open < c.minOpen) return out;
+      const r = v / open;
+      if (!inDip) {
+        if (r < c.enterRatio) { inDip = true; start = nowMs; }
+      } else {
+        const dur = nowMs - start;
+        if (r >= c.exitRatio) {
+          inDip = false;
+          if (dur <= c.maxMs && nowMs - last >= c.refractoryMs) { last = nowMs; out.blink = true; }
+        } else if (dur > c.maxMs) {
+          // stuck low: the level has shifted (head down / eyes looking down). Re-learn from the latest frames.
+          inDip = false;
+          longClosures += 1;
+          out.longClosure = true;
+          buf = buf.slice(-4);
+        }
+      }
+      return out;
+    },
+    get longClosures() { return longClosures; },
+    get open() { return buf.length ? level() : null; },
+  };
+}
+
+// Merge blink events from several detectors into one count: events closer than mergeMs are one blink.
+export function makeBlinkFuser(mergeMs = 450) {
+  let last = -1e9;
+  return {
+    // call when ANY detector reports a blink; returns true if it is a new blink
+    add(nowMs) {
+      if (nowMs - last < mergeMs) return false;
+      last = nowMs;
+      return true;
+    },
   };
 }

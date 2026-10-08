@@ -10,7 +10,7 @@ import {
   FaceLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-import { makeBlinkDetector, makeEarClosure, eyeAspectRatio } from "./blink.js";
+import { makeBlinkDetector, makeEarClosure, eyeAspectRatio, makeRatioDipDetector, makeBlinkFuser } from "./blink.js";
 import { poseFromMatrix, makePitchOrienter, faceSizeFrac, frameQuality } from "./pose.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
@@ -80,6 +80,14 @@ let blinkDetector = makeBlinkDetector();
 let earClosure = makeEarClosure();
 let earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
 let blinkCountEar = 0; // what the eyelid-shape signal alone counted (comparison only for now)
+// The real count is now the union of two detectors, so it keeps working when the head is down and the eyelids sit half-closed:
+//  - the relative eyelid-score detector (blinkDetector), and
+//  - a scale-free dip detector on the eyelid-shape ratio (dipDetector): a blink = a quick dip to a fraction of the person's OWN recent open level.
+// Events from either that fall within 450 ms are one blink.
+let dipDetector = makeRatioDipDetector();
+let blinkFuser = makeBlinkFuser(450);
+let blinkCountBs = 0;  // what the eyelid-score detector alone counted (comparison only)
+let blinkCountDip = 0; // what the dip detector alone counted (comparison only)
 let blinkTrace = { t: [], bs: [], ear: [], ld: [] }; // raw numeric eyelid signals per frame (numbers only, no video); ld = eyes-look-down score
 // Shadow detector on a head-down-compensated eyelid score: eyelids drop when the EYES look down,
 // which the raw blink score mistakes for closing. Comparison only until real sessions show which is closer to truth.
@@ -282,6 +290,10 @@ async function startSession() {
   earClosure = makeEarClosure();
   earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
   blinkCountEar = 0;
+  dipDetector = makeRatioDipDetector();
+  blinkFuser = makeBlinkFuser(450);
+  blinkCountBs = 0;
+  blinkCountDip = 0;
   blinkTrace = { t: [], bs: [], ear: [], ld: [] };
   compDetector = makeBlinkDetector();
   blinkCountComp = 0;
@@ -785,7 +797,10 @@ function processBlink(blendshapes, landmarks) {
     blinkCountComp += 1;
     bk2.blinksComp = (bk2.blinksComp || 0) + 1;
   }
-  if (r.blink) {
+  const dipRes = dipDetector.update(ear, now);
+  if (r.blink) { blinkCountBs += 1; bk2.blinksBs = (bk2.blinksBs || 0) + 1; }
+  if (dipRes.blink) { blinkCountDip += 1; bk2.blinksDip = (bk2.blinksDip || 0) + 1; }
+  if ((r.blink || dipRes.blink) && blinkFuser.add(now)) {
     blinkCount += 1;
     bk2.blinks += 1;
     animateValueUpdate(blinkValueEl, String(blinkCount));
@@ -896,6 +911,8 @@ function buildTimeline() {
       if (b.gH.length && baseH !== null) row.gHrel = round1((average(b.gH) - baseH) * 100); // sideways look-away vs own baseline (points)
       if (b.gV.length && baseV !== null) row.gVrel = round1((average(b.gV) - baseV) * 100); // up/down look-away vs own baseline (points)
       if (b.blinksComp) row.blinksComp = b.blinksComp; // head-down-compensated blink count (comparison only)
+      if (b.blinksBs) row.blinksBs = b.blinksBs;       // eyelid-score detector alone (comparison only)
+      if (b.blinksDip) row.blinksDip = b.blinksDip;    // scale-free dip detector alone (comparison only)
     }
     if (b.tap) row.tap = true; // a screen tap happened here — treat fidget with caution
     out.push(row);
@@ -1083,10 +1100,13 @@ async function endSession(reason = "unknown") {
       ...(warmUpInfo || {}),
       avgFps: durationSec > 0 ? Math.round((framesProcessed / durationSec) * 10) / 10 : null,
       cameraVisible: selectedTaskType === "work",
-      blinkMethod: "relative-v1",
+      blinkMethod: "fused-v2", // union of the eyelid-score detector (noise fixed) and the scale-free EAR dip detector
       blinkCountOld, // what the old fixed-threshold method counted (comparison only)
       blinkCountEar, // what the eyelid-shape signal alone counted (comparison only)
       blinkCountComp, // what the head-down-compensated eyelid score counted (comparison only)
+      blinkCountBs, // eyelid-score detector alone (comparison only)
+      blinkCountDip, // scale-free dip detector alone (comparison only)
+      dipLongClosures: dipDetector.longClosures,
       poseV2: (() => {
         const ps = poseState;
         const sorted = ps.rel.slice().sort((a, b) => a - b);
@@ -1246,6 +1266,10 @@ function resetToLanding() {
   earClosure = makeEarClosure();
   earDetector = makeBlinkDetector({ riseDelta: 0.2, fallDelta: 0.1, minPeak: 0.25 });
   blinkCountEar = 0;
+  dipDetector = makeRatioDipDetector();
+  blinkFuser = makeBlinkFuser(450);
+  blinkCountBs = 0;
+  blinkCountDip = 0;
   blinkTrace = { t: [], bs: [], ear: [], ld: [] };
   compDetector = makeBlinkDetector();
   blinkCountComp = 0;
