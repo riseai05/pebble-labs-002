@@ -12,6 +12,7 @@ import {
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 import { makeBlinkDetector, makeEarClosure, eyeAspectRatio, makeRatioDipDetector, makeBlinkFuser } from "./blink.js";
 import { poseFromMatrix, makePitchOrienter, faceSizeFrac, frameQuality } from "./pose.js";
+import { makeGazeTracker, gazeFromBlendshapes } from "./gaze.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
 const WORK_SESSION_SECONDS = 600; // 10 minutes
@@ -31,6 +32,7 @@ const IDLE_THRESHOLD_MS = 15000; // only tracked in "work" mode
 const screens = {
   landing: document.getElementById("landing"),
   session: document.getElementById("session"),
+  quiz: document.getElementById("quiz"),
   results: document.getElementById("results"),
 };
 const startBtn = document.getElementById("startBtn");
@@ -99,6 +101,39 @@ function newPoseState() {
   return { orienter: makePitchOrienter(), baseRaw: [], base: null, ok: 0, bad: 0, rel: [], quality: [] };
 }
 let poseState = newPoseState();
+// Gaze is judged against the person's OWN normal eye position, ignoring blink / closed-lid frames (gaze.js).
+let gazeTracker = makeGazeTracker();
+let gazeFinal = null; // post-session pass with the final reference position
+
+// Reading comprehension quiz (read mode only), shown right after the passage ends and before the results.
+// Each question points at the passage paragraph (1-based) that holds its answer, so a question about a part
+// the person never scrolled to can be told apart from one they read and forgot.
+const QUIZ_VERSION = "passage-v1";
+const QUIZ_ITEMS = [
+  { id: "q1", para: 1, text: "According to the passage, what does this project start from?", correct: "a", options: [
+    { id: "a", text: "A human problem: the way focus quietly degrades during a task" },
+    { id: "b", text: "A sensor that a company had already built" },
+    { id: "c", text: "A finished wearable product" },
+    { id: "d", text: "A large dataset from a sleep lab" } ] },
+  { id: "q2", para: 3, text: "What question is the webcam-and-browser test built to answer before any hardware is designed?", correct: "a", options: [
+    { id: "a", text: "Whether the signal is there at all" },
+    { id: "b", text: "Which frame colour people prefer" },
+    { id: "c", text: "How cheaply the glasses can be manufactured" },
+    { id: "d", text: "How many people would pay for a subscription" } ] },
+  { id: "q3", para: 5, text: "What does the passage say a few dozen short sessions CAN show?", correct: "b", options: [
+    { id: "a", text: "That the signals predict attention for every person and device" },
+    { id: "b", text: "Whether the effect is large enough to be worth chasing at all" },
+    { id: "c", text: "Which phone brand has the best camera" },
+    { id: "d", text: "That the hardware should be built immediately" } ] },
+  { id: "q4", para: 6, text: "If the signals turn out to carry real information, what does the passage say comes next?", correct: "b", options: [
+    { id: "a", text: "Asking people whether they think the idea is plausible" },
+    { id: "b", text: "Turning that information into something useful at the moment it matters, like a quiet nudge to rest" },
+    { id: "c", text: "Building the largest possible dashboard" },
+    { id: "d", text: "Stopping, because the experiment is finished" } ] },
+];
+let quizResult = null;       // saved into the session row's exit_survey.quiz
+let quizShownAtMs = 0;
+let paraSeenSec = [];        // per passage paragraph: seconds into the session when its END first came into view in the reading box (null = never)
 const BLINK_TRACE_MAX_FRAMES = 12000;
 let eyesCurrentlyClosed = false;
 let lastBlinkTimestamp = 0;
@@ -299,6 +334,8 @@ async function startSession() {
   blinkCountComp = 0;
   lastLookDown = null;
   poseState = newPoseState();
+  gazeTracker = makeGazeTracker();
+  gazeFinal = null;
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];
@@ -318,6 +355,10 @@ async function startSession() {
   noFaceStartMs = null;
   faceLostSpans = [];
   sessionStartMs = performance.now();
+  quizResult = null;
+  sessionReadingPanel.scrollTop = 0;
+  paraSeenSec = new Array(sessionReadingPanel.querySelectorAll("p").length).fill(null);
+  if (selectedTaskType === "read") checkReadingProgress();
 
   sessionStatus.textContent = "Tracking — go ahead and read or work as you normally would.";
   stopBtn.classList.remove("hidden");
@@ -581,7 +622,8 @@ function buildSessionNotes(ctx) {
       if (basePitch !== null && r.pitch !== null && r.pitch - basePitch >= 8) mark("head_down", r);
       if (basePitch !== null && r.pitch !== null && basePitch - r.pitch >= 8) mark("head_raised", r);
     }
-    if (typeof r.gazeRel === "number" && r.gazeRel >= 20) mark("eyes_off_screen", r);
+    if (typeof r.gOff === "number") { if (r.gOff >= 0.35 && r.eo >= 0.4) mark("eyes_off_screen", r); } // 3.5s+ of a 10s chunk away from own normal position
+    else if (typeof r.gazeRel === "number" && r.gazeRel >= 20) mark("eyes_off_screen", r);
     if (r.fidget >= 60 && !r.tap) mark("large_movement", r);
   }
   // No blinks for 40s+ while the face was being tracked
@@ -595,7 +637,7 @@ function buildSessionNotes(ctx) {
   const details = {
     head_down: "Head dropped sharply: looking down (possible phone or other device)",
     head_raised: "Head raised sharply, or the device was moved",
-    eyes_off_screen: "Eyes drifted away from the screen (compared with this person's own start)",
+    eyes_off_screen: "Eyes moved away from where they normally rest (compared with this person's own typical eye position)",
     large_movement: "Large movement: repositioned or shifted a lot",
     no_blinks: "No blinks detected: very focused, or the tracker missed them",
   };
@@ -670,6 +712,7 @@ function buildSessionNotes(ctx) {
 
 function updateTimerDisplay() {
   const elapsedSec = (performance.now() - sessionStartMs) / 1000;
+  if (selectedTaskType === "read") checkReadingProgress();
   const m = Math.floor(elapsedSec / 60);
   const s = Math.floor(elapsedSec % 60);
   const clock = `${m}:${s.toString().padStart(2, "0")}`;
@@ -817,7 +860,7 @@ function currentBucket() {
       // blink-score diagnostics: the raw eyelid-closure score the blink threshold is compared against
       bMin: Infinity, bMax: -Infinity, bSum: 0, bN: 0, closedFrames: 0,
       frames: 0, // every frame the model ran this chunk, with or without a face
-      p3: [], yawAbs: [], q: [], size: [], ld: [], gH: [], gV: [], // 3D head pose, tracking quality, face size, eyes-look-down, horizontal/vertical gaze
+      p3: [], yawAbs: [], q: [], size: [], ld: [], // 3D head pose, tracking quality, face size, eyes-look-down
     };
   }
   return timelineBuckets[idx];
@@ -847,16 +890,12 @@ function buildTimeline() {
 
   // Same idea for the real 3D pitch, and for horizontal/vertical gaze: personal baseline = first 30s.
   const sign = poseState.orienter.sign;
-  const baseP3 = [], baseGH = [], baseGV = [];
+  const baseP3 = [];
   for (let i = 0; i < Math.ceil(TIMELINE_BASELINE_SEC / TIMELINE_BUCKET_SEC); i++) {
     if (!timelineBuckets[i]) continue;
     baseP3.push(...timelineBuckets[i].p3);
-    baseGH.push(...timelineBuckets[i].gH);
-    baseGV.push(...timelineBuckets[i].gV);
   }
   const base3 = baseP3.length >= TIMELINE_MIN_FRAMES ? sign * average(baseP3) : null;
-  const baseH = baseGH.length >= TIMELINE_MIN_FRAMES ? average(baseGH) : null;
-  const baseV = baseGV.length >= TIMELINE_MIN_FRAMES ? average(baseGV) : null;
   const elapsedNow = (performance.now() - sessionStartMs) / 1000;
 
   const out = [];
@@ -908,8 +947,15 @@ function buildTimeline() {
       if (b.ld.length) row.ld = r2(average(b.ld));     // eyes-look-down score: when high, eyelids droop and blink readings are shaky
       if (b.size.length) row.size = r2(average(b.size)); // face size (inter-eye distance / frame width)
       if (b.q.length) { row.q = r2(average(b.q)); row.qLow = r2(b.q.filter((x) => x < 0.5).length / b.q.length); } // tracking trust 0..1, and share of frames below 0.5
-      if (b.gH.length && baseH !== null) row.gHrel = round1((average(b.gH) - baseH) * 100); // sideways look-away vs own baseline (points)
-      if (b.gV.length && baseV !== null) row.gVrel = round1((average(b.gV) - baseV) * 100); // up/down look-away vs own baseline (points)
+      // gaze v2 (gaze.js), judged against this person's own typical eye position over the whole session
+      const gb2 = gazeFinal && gazeFinal.buckets ? gazeFinal.buckets[i] : null;
+      if (gb2 && gb2.total) {
+        row.eo = r2(gb2.readable / gb2.total);                                   // share of frames where the eyes could be read (not closing/closed)
+        if (gb2.readable) {
+          row.gOff = r2(gb2.off / gb2.readable);                                // share of readable frames away from the person's own normal position
+          row.gDev = round1((100 * gb2.dSum) / gb2.readable);                   // mean distance from own normal position (x100)
+        }
+      }
       if (b.blinksComp) row.blinksComp = b.blinksComp; // head-down-compensated blink count (comparison only)
       if (b.blinksBs) row.blinksBs = b.blinksBs;       // eyelid-score detector alone (comparison only)
       if (b.blinksDip) row.blinksDip = b.blinksDip;    // scale-free dip detector alone (comparison only)
@@ -929,16 +975,13 @@ function processGaze(blendshapes) {
     ...lookAwayNames.map((n) => getBlendshapeScore(blendshapes, n)),
     0
   );
-  gazeSamples.push(maxDeviation);
+  gazeSamples.push(maxDeviation);          // old absolute measure: kept only for comparison (perf.gaze.scoreOld)
   currentBucket().gaze.push(maxDeviation);
-  // Split the same signal into horizontal (in/out) and vertical (up/down) so "eyes on a phone below the camera"
-  // (vertical) can be told apart from "eyes wandered sideways" (horizontal).
-  const gb = currentBucket();
-  gb.gH.push(Math.max(...["eyeLookInLeft", "eyeLookOutLeft", "eyeLookInRight", "eyeLookOutRight"].map((n) => getBlendshapeScore(blendshapes, n)), 0));
-  gb.gV.push(Math.max(...["eyeLookUpLeft", "eyeLookDownLeft", "eyeLookUpRight", "eyeLookDownRight"].map((n) => getBlendshapeScore(blendshapes, n)), 0));
 
-  const recentAvg = average(gazeSamples.slice(-30));
-  animateValueUpdate(gazeValueEl, recentAvg < 0.25 ? "Steady" : recentAvg < 0.5 ? "Drifting" : "Away");
+  const g = gazeFromBlendshapes((n) => getBlendshapeScore(blendshapes, n));
+  const res = gazeTracker.update({ t: performance.now() - sessionStartMs, h: g.h, v: g.v, blink: g.blink });
+  const label = { calibrating: "Learning", steady: "Steady", drifting: "Drifting", away: "Away", unreadable: "--" }[res.state] || "--";
+  animateValueUpdate(gazeValueEl, label);
 }
 
 // Light exponential smoothing to keep frame-to-frame landmark jitter from
@@ -1061,7 +1104,11 @@ async function endSession(reason = "unknown") {
     faceDetectedDurationSec > 0 ? (blinkCount / faceDetectedDurationSec) * 60 : 0;
 
   const avgGazeDeviation = average(gazeSamples);
-  const gazeStabilityScore = Math.round(Math.max(0, 100 - avgGazeDeviation * 100));
+  const gazeScoreOld = Math.round(Math.max(0, 100 - avgGazeDeviation * 100)); // old absolute method, comparison only
+  gazeFinal = gazeTracker.finalize(TIMELINE_BUCKET_SEC * 1000);
+  // New gaze stability = % of readable time the eyes stayed where this person's eyes normally rest.
+  // Falls back to the old number only if there was too little readable data to judge.
+  const gazeStabilityScore = gazeFinal.score !== null ? gazeFinal.score : gazeScoreOld;
 
   const rollVariance = variance(headAngleSamples.map((h) => h.roll));
   const yawVariance = variance(headAngleSamples.map((h) => h.yaw));
@@ -1103,6 +1150,13 @@ async function endSession(reason = "unknown") {
       blinkMethod: "fused-v2", // union of the eyelid-score detector (noise fixed) and the scale-free EAR dip detector
       blinkCountOld, // what the old fixed-threshold method counted (comparison only)
       blinkCountEar, // what the eyelid-shape signal alone counted (comparison only)
+      gaze: {
+        method: gazeFinal.score !== null ? "relative-v2" : "old-fallback",
+        scoreOld: gazeScoreOld,                       // what the old absolute method would have said
+        readableShare: gazeFinal.readableShare === null ? null : Math.round(gazeFinal.readableShare * 100) / 100,
+        ref: gazeFinal.ref,                           // the person's own normal eye position (h = left/right, v = up/down)
+        driftShare: gazeFinal.driftShare, awayShare: gazeFinal.awayShare, meanDist: gazeFinal.meanDist,
+      },
       blinkCountComp, // what the head-down-compensated eyelid score counted (comparison only)
       blinkCountBs, // eyelid-score detector alone (comparison only)
       blinkCountDip, // scale-free dip detector alone (comparison only)
@@ -1143,7 +1197,8 @@ async function endSession(reason = "unknown") {
   }
 
   lastSessionSummary = summary;
-  showResults(summary);
+  if (selectedTaskType === "read") showQuiz();
+  else showResults(summary);
 
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
@@ -1158,8 +1213,13 @@ async function endSession(reason = "unknown") {
 function submitExitSurvey() {
   const accuracyInput = document.querySelector('input[name="accuracyRating"]:checked');
   const wouldUseInput = document.querySelector('input[name="wouldUse"]:checked');
+  const effortInput = document.querySelector('input[name="mentalEffort"]:checked');
 
   const exitSurveyAnswers = {
+    // 1-9: "How much mental effort did that take?" (1 = very little, 9 = a huge amount)
+    mentalEffort: effortInput ? Number(effortInput.value) : null,
+    // the quiz is part of the same exit_survey object, because this save replaces the whole column
+    ...(quizResult ? { quiz: quizResult } : {}),
     accuracyRating: accuracyInput ? accuracyInput.value : null,
     surprise: surpriseInput.value.trim(),
     wouldUse: wouldUseInput ? wouldUseInput.value : null,
@@ -1209,6 +1269,110 @@ async function logSessionToSupabase(summary, exitSurveyAnswers, sessionId) {
   }
 }
 
+// ---- Reading progress + comprehension quiz ----------------------------------------------------------------
+// A paragraph counts as "reached" the first time its END is visible inside the scrolling reading box.
+function checkReadingProgress() {
+  if (!sessionStartMs || sessionReadingPanel.classList.contains("hidden")) return;
+  const box = sessionReadingPanel.getBoundingClientRect();
+  const paras = sessionReadingPanel.querySelectorAll("p");
+  for (let i = 0; i < paras.length; i++) {
+    if (paraSeenSec[i] !== null && paraSeenSec[i] !== undefined) continue;
+    if (paras[i].getBoundingClientRect().bottom <= box.bottom + 2) {
+      paraSeenSec[i] = Math.round((performance.now() - sessionStartMs) / 1000);
+    }
+  }
+}
+sessionReadingPanel.addEventListener("scroll", checkReadingProgress, { passive: true });
+
+const quizQuestionsEl = document.getElementById("quizQuestions");
+const submitQuizBtn = document.getElementById("submitQuizBtn");
+
+function shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function renderQuiz() {
+  quizQuestionsEl.textContent = "";
+  QUIZ_ITEMS.forEach((q, qi) => {
+    const wrap = document.createElement("div");
+    wrap.className = "quiz-q";
+    const title = document.createElement("p");
+    title.className = "quiz-q-text";
+    title.textContent = `${qi + 1}. ${q.text}`;
+    wrap.appendChild(title);
+    const opts = document.createElement("div");
+    opts.className = "quiz-opts";
+    // option order is shuffled per person so position can't bias the answers; "I don't know" always stays last
+    [...shuffled(q.options), { id: "dk", text: "I don't know" }].forEach((o) => {
+      const label = document.createElement("label");
+      label.className = "quiz-opt" + (o.id === "dk" ? " quiz-opt-dk" : "");
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "quiz_" + q.id;
+      input.value = o.id;
+      const span = document.createElement("span");
+      span.textContent = o.text;
+      label.appendChild(input);
+      label.appendChild(span);
+      opts.appendChild(label);
+    });
+    wrap.appendChild(opts);
+    quizQuestionsEl.appendChild(wrap);
+  });
+  submitQuizBtn.disabled = true;
+}
+
+function quizAllAnswered() {
+  return QUIZ_ITEMS.every((q) => document.querySelector(`input[name="quiz_${q.id}"]:checked`));
+}
+quizQuestionsEl.addEventListener("change", () => { submitQuizBtn.disabled = !quizAllAnswered(); });
+
+function showQuiz() {
+  renderQuiz();
+  quizShownAtMs = performance.now();
+  showScreen("quiz");
+  window.scrollTo(0, 0);
+}
+
+function submitQuiz() {
+  if (!quizAllAnswered()) return;
+  const answers = QUIZ_ITEMS.map((q) => {
+    const choice = document.querySelector(`input[name="quiz_${q.id}"]:checked`).value;
+    return {
+      id: q.id,
+      para: q.para,
+      choice,
+      correct: choice === q.correct,
+      dk: choice === "dk",
+      reached: paraSeenSec[q.para - 1] !== null && paraSeenSec[q.para - 1] !== undefined, // did the end of that paragraph ever scroll into view
+    };
+  });
+  const reachedParas = paraSeenSec.reduce((n, v) => n + (v !== null && v !== undefined ? 1 : 0), 0);
+  quizResult = {
+    version: QUIZ_VERSION,
+    score: answers.filter((a) => a.correct).length,
+    n: answers.length,
+    scoreReached: answers.filter((a) => a.correct && a.reached).length, // correct among questions whose paragraph was reached
+    nReached: answers.filter((a) => a.reached).length,
+    answers,
+    parasReached: reachedParas,
+    paraCount: paraSeenSec.length,
+    paraSeenSec,
+    quizSec: Math.round((performance.now() - quizShownAtMs) / 1000),
+  };
+  // Save straight away (into the same session row) so it survives closing the tab before the exit survey.
+  const sid = currentSessionId;
+  if (sid) (sessionSavePromise || Promise.resolve()).then(() => saveSurveyToSupabase(sid, { quiz: quizResult }));
+  showResults(lastSessionSummary);
+  window.scrollTo(0, 0);
+}
+submitQuizBtn.addEventListener("click", submitQuiz);
+
 function showResults(summary) {
   showScreen("results");
 
@@ -1233,6 +1397,11 @@ function showResults(summary) {
   document.getElementById("resBlinkRate").textContent = summary.blinkRatePerMin;
   document.getElementById("resGaze").textContent = `${summary.gazeStabilityScore}%`;
   document.getElementById("resPosture").textContent = `${summary.postureStabilityScore}%`;
+  const quizRow = document.getElementById("resQuizRow");
+  if (quizRow) {
+    quizRow.classList.toggle("hidden", !quizResult);
+    if (quizResult) document.getElementById("resQuiz").textContent = `${quizResult.score} / ${quizResult.n}`;
+  }
   // headDropAngle and fidgetScore are logged but intentionally not shown here —
   // only the metrics the tester already saw during the session (blink/gaze/posture)
   // are surfaced at the end, per the "visible metrics only" rule.
@@ -1249,6 +1418,9 @@ function resetToLanding() {
   postSurveyThanks.classList.add("hidden");
   restartBtn.classList.add("hidden");
   document.querySelectorAll('input[name="accuracyRating"]').forEach((el) => { el.checked = false; });
+  document.querySelectorAll('input[name="mentalEffort"]').forEach((el) => { el.checked = false; });
+  quizResult = null;
+  quizQuestionsEl.textContent = "";
   document.querySelectorAll('input[name="wouldUse"]').forEach((el) => { el.checked = false; });
   surpriseInput.value = "";
 
@@ -1275,6 +1447,8 @@ function resetToLanding() {
   blinkCountComp = 0;
   lastLookDown = null;
   poseState = newPoseState();
+  gazeTracker = makeGazeTracker();
+  gazeFinal = null;
   eyesCurrentlyClosed = false;
   lastBlinkTimestamp = 0;
   gazeSamples = [];

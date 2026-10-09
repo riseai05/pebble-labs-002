@@ -165,6 +165,17 @@
     </div>
   </section>
 
+  <!-- QUIZ SCREEN (read mode only): shown right after the passage ends, before the results -->
+  <section id="quiz" class="screen hidden">
+    <div class="screen-inner card">
+      <span class="eyebrow">Quick check</span>
+      <h2>What do you remember?</h2>
+      <p class="quiz-sub">Four quick questions about what you just read. Answer from memory. It's fine to say you don't know.</p>
+      <div id="quizQuestions"></div>
+      <button id="submitQuizBtn" class="btn-primary" disabled>Continue</button>
+    </div>
+  </section>
+
   <!-- RESULTS SCREEN -->
   <section id="results" class="screen hidden">
     <div class="screen-inner card">
@@ -198,10 +209,30 @@
           <span class="stat-row-label">Posture stability</span>
           <span class="stat-row-value" id="resPosture">--</span>
         </div>
+        <div class="stat-row hidden" id="resQuizRow">
+          <span class="stat-row-label">Quiz</span>
+          <span class="stat-row-value" id="resQuiz">--</span>
+        </div>
       </div>
 
       <div id="exitSurvey" class="exit-survey">
         <h3 class="exit-survey-title">Quick last thing</h3>
+
+        <div class="survey-q">
+          <span class="survey-q-label">How much mental effort did that take?</span>
+          <div class="survey-scale survey-scale-9">
+            <label><input type="radio" name="mentalEffort" value="1" /> 1</label>
+            <label><input type="radio" name="mentalEffort" value="2" /> 2</label>
+            <label><input type="radio" name="mentalEffort" value="3" /> 3</label>
+            <label><input type="radio" name="mentalEffort" value="4" /> 4</label>
+            <label><input type="radio" name="mentalEffort" value="5" /> 5</label>
+            <label><input type="radio" name="mentalEffort" value="6" /> 6</label>
+            <label><input type="radio" name="mentalEffort" value="7" /> 7</label>
+            <label><input type="radio" name="mentalEffort" value="8" /> 8</label>
+            <label><input type="radio" name="mentalEffort" value="9" /> 9</label>
+          </div>
+          <div class="survey-anchors"><span>1 = very little</span><span>9 = a huge amount</span></div>
+        </div>
 
         <div class="survey-q">
           <span class="survey-q-label">How accurate did this feel?</span>
