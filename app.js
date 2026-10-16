@@ -11,7 +11,7 @@ import {
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 import { makeBlinkDetector, makeEarClosure, eyeAspectRatio, makeRatioDipDetector, makeBlinkFuser } from "./blink.js";
-import { poseFromMatrix, makePitchOrienter, faceSizeFrac, frameQuality } from "./pose.js";
+import { poseFromMatrix, makePitchOrienter, faceSizeFrac, frameQuality, computePostureScore } from "./pose.js";
 import { makeGazeTracker, gazeFromBlendshapes } from "./gaze.js";
 
 const READ_SESSION_SECONDS = 300; // 5 minutes (the passage takes ~3.5)
@@ -1018,7 +1018,7 @@ function processHeadAngle(landmarks) {
   // This is not the same as a true body-pose forward-lean angle (that needs
   // shoulder/torso landmarks from a pose model, which isn't in this
   // pipeline) — treat it as a head-only approximation.
-  headAngleSamples.push({ yaw: smoothedYaw, pitch: smoothedPitch, roll: smoothedRoll });
+  headAngleSamples.push({ yaw: smoothedYaw, pitch: smoothedPitch, roll: smoothedRoll, t: (performance.now() - sessionStartMs) / 1000 });
   {
     const b = currentBucket();
     b.yaw.push(smoothedYaw);
@@ -1114,7 +1114,9 @@ async function endSession(reason = "unknown") {
   const yawVariance = variance(headAngleSamples.map((h) => h.yaw));
   const pitchVariance = variance(headAngleSamples.map((h) => h.pitch));
   const combinedVariance = rollVariance + yawVariance + pitchVariance;
-  const postureStabilityScore = Math.round(Math.max(0, 100 - combinedVariance * 0.65));
+  // v2: how long the head sat away from this person's own normal position (see pose.js), not just how much it wobbled.
+  const postureV2 = computePostureScore({ pitchRel: poseState.rel, samples: headAngleSamples, baselineSec: TIMELINE_BASELINE_SEC, combinedVariance });
+  const postureStabilityScore = postureV2.score;
 
   // Structured posture detail (backend-only, never shown in the UI).
   // headDropAngle: average smoothed pitch — a proxy for forward lean/head drop.
@@ -1161,6 +1163,7 @@ async function endSession(reason = "unknown") {
       blinkCountBs, // eyelid-score detector alone (comparison only)
       blinkCountDip, // scale-free dip detector alone (comparison only)
       dipLongClosures: dipDetector.longClosures,
+      postureV2, // score parts (down/tilt/move penalties + the old variance-only score) so the formula can be tuned from logged data
       poseV2: (() => {
         const ps = poseState;
         const sorted = ps.rel.slice().sort((a, b) => a - b);

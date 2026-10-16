@@ -81,3 +81,66 @@ export function frameQuality({ yaw, pitchRel, size, lookDown }) {
   if (!f.length) return null;
   return f.reduce((a, b) => a * b, 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Posture score v2.
+// Why: the old score was 100 - variance(roll,yaw,pitch) * 0.65, i.e. it only measured how much the head
+// WOBBLES. A person who sits steadily in an awkward slump has low variance and still scored ~90.
+// Now the score mostly reflects HOW LONG the head sat away from this person's own normal position
+// (first `baselineSec` seconds), with the old movement term kept as a smaller part.
+//   100 - downPenalty (head down vs own baseline, max 50)
+//       - tiltPenalty (head rolled/turned sideways vs own baseline, max 25)
+//       - movePenalty (restlessness, max 25)
+// Everything is relative to the person's own start position, so how the phone is held cancels out.
+// Limit: if someone is slumped from second 0, the baseline itself is slumped and this cannot see it.
+// samples: [{ t (sec since start), roll, yaw, pitch }]   pitchRel: 3D head-down degrees vs baseline.
+const median = (a) => {
+  if (!a.length) return null;
+  const s = a.slice().sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+};
+
+export function computePostureScore({ pitchRel = [], samples = [], baselineSec = 30, combinedVariance = 0, minFrames = 30 }) {
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  const share = (arr, fn) => (arr.length ? arr.filter(fn).length / arr.length : 0);
+  const oldScore = Math.round(Math.max(0, 100 - combinedVariance * 0.65));
+  const rel = pitchRel.filter((x) => Number.isFinite(x));
+  const base = samples.filter((s) => s.t <= baselineSec);
+  const rest = samples.filter((s) => s.t > baselineSec);
+  const haveRest = base.length >= minFrames && rest.length >= minFrames;
+
+  let downPenalty = 0, down10 = null, down20 = null, downMethod = "none";
+  if (rel.length >= minFrames) {
+    downMethod = "3d";
+    down10 = share(rel, (x) => x >= 10);
+    down20 = share(rel, (x) => x >= 20);
+  } else if (haveRest) {
+    // matrix pose unavailable: fall back to the 2D nose-vs-eyes proxy, relative to the first 30s (smaller scale, so lower cut-offs)
+    downMethod = "2d-fallback";
+    const bp = median(base.map((s) => s.pitch));
+    down10 = share(rest, (s) => s.pitch - bp >= 6);
+    down20 = share(rest, (s) => s.pitch - bp >= 12);
+  }
+  if (down10 !== null) downPenalty = clamp(60 * down10 + 60 * down20, 0, 50);
+
+  let tiltPenalty = 0, tiltShare = null;
+  if (haveRest) {
+    const br = median(base.map((s) => s.roll));
+    const by = median(base.map((s) => s.yaw));
+    tiltShare = share(rest, (s) => Math.abs(s.roll - br) >= 8 || Math.abs(s.yaw - by) >= 10);
+    tiltPenalty = clamp(50 * tiltShare, 0, 25);
+  }
+
+  const movePenalty = clamp(combinedVariance * 0.4, 0, 25);
+  if (downMethod === "none" && tiltShare === null) {
+    // too little data to judge position (very short session): keep the old number so nothing breaks
+    return { score: oldScore, method: "variance-only", oldScore, downPenalty: 0, tiltPenalty: 0, movePenalty: null, down10: null, down20: null, tiltShare: null };
+  }
+  const score = Math.round(clamp(100 - downPenalty - tiltPenalty - movePenalty, 0, 100));
+  const r2 = (x) => (x === null ? null : Math.round(x * 100) / 100);
+  return {
+    score, method: downMethod, oldScore,
+    downPenalty: Math.round(downPenalty), tiltPenalty: Math.round(tiltPenalty), movePenalty: Math.round(movePenalty),
+    down10: r2(down10), down20: r2(down20), tiltShare: r2(tiltShare),
+  };
+}
