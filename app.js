@@ -108,28 +108,33 @@ let gazeFinal = null; // post-session pass with the final reference position
 // Reading comprehension quiz (read mode only), shown right after the passage ends and before the results.
 // Each question points at the passage paragraph (1-based) that holds its answer, so a question about a part
 // the person never scrolled to can be told apart from one they read and forgot.
-const QUIZ_VERSION = "passage-v1";
+const QUIZ_VERSION = "passage-v2"; // v2: five short, easy questions (v1 was four harder ones), one per paragraph 1, 2, 3, 4 and 6
 const QUIZ_ITEMS = [
-  { id: "q1", para: 1, text: "According to the passage, what does this project start from?", correct: "a", options: [
-    { id: "a", text: "A human problem: the way focus quietly degrades during a task" },
-    { id: "b", text: "A sensor that a company had already built" },
-    { id: "c", text: "A finished wearable product" },
-    { id: "d", text: "A large dataset from a sleep lab" } ] },
-  { id: "q2", para: 3, text: "What question is the webcam-and-browser test built to answer before any hardware is designed?", correct: "a", options: [
-    { id: "a", text: "Whether the signal is there at all" },
-    { id: "b", text: "Which frame colour people prefer" },
-    { id: "c", text: "How cheaply the glasses can be manufactured" },
-    { id: "d", text: "How many people would pay for a subscription" } ] },
-  { id: "q3", para: 5, text: "What does the passage say a few dozen short sessions CAN show?", correct: "b", options: [
-    { id: "a", text: "That the signals predict attention for every person and device" },
-    { id: "b", text: "Whether the effect is large enough to be worth chasing at all" },
-    { id: "c", text: "Which phone brand has the best camera" },
-    { id: "d", text: "That the hardware should be built immediately" } ] },
-  { id: "q4", para: 6, text: "If the signals turn out to carry real information, what does the passage say comes next?", correct: "b", options: [
-    { id: "a", text: "Asking people whether they think the idea is plausible" },
-    { id: "b", text: "Turning that information into something useful at the moment it matters, like a quiet nudge to rest" },
-    { id: "c", text: "Building the largest possible dashboard" },
-    { id: "d", text: "Stopping, because the experiment is finished" } ] },
+  { id: "q1", para: 1, text: "Which of these does the project look at?", correct: "a", options: [
+    { id: "a", text: "How often you blink" },
+    { id: "b", text: "How loudly you laugh" },
+    { id: "c", text: "How fast you type" },
+    { id: "d", text: "What you had for lunch" } ] },
+  { id: "q2", para: 2, text: "Which of these can change how often you blink?", correct: "c", options: [
+    { id: "a", text: "Your shoe size" },
+    { id: "b", text: "The colour of your phone case" },
+    { id: "c", text: "Caffeine" },
+    { id: "d", text: "The name of the app" } ] },
+  { id: "q3", para: 3, text: "What question is the cheap webcam test trying to answer?", correct: "b", options: [
+    { id: "a", text: "Which phone has the best camera" },
+    { id: "b", text: "Whether the signal is there at all" },
+    { id: "c", text: "How much the glasses will cost" },
+    { id: "d", text: "What colour the frames should be" } ] },
+  { id: "q4", para: 4, text: "How does the passage ask you to read it?", correct: "d", options: [
+    { id: "a", text: "Without blinking, staring at the camera" },
+    { id: "b", text: "As fast as you possibly can" },
+    { id: "c", text: "Trying hard to look focused" },
+    { id: "d", text: "Naturally, at your own pace" } ] },
+  { id: "q5", para: 6, text: "What kind of nudge does the passage imagine for later?", correct: "a", options: [
+    { id: "a", text: "A quiet reminder to rest your eyes, fix your posture or take a break" },
+    { id: "b", text: "A loud alarm" },
+    { id: "c", text: "A pop-up ad" },
+    { id: "d", text: "A message from your boss" } ] },
 ];
 let quizResult = null;       // saved into the session row's exit_survey.quiz
 let quizShownAtMs = 0;
