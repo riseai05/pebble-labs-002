@@ -508,6 +508,7 @@ async function playChime() {
 
 function showDistractionCheck() {
   lastDistractionUiMs = performance.now();
+  logDistractionEvent("triggered_distraction_question_shown"); // exact moment the yes/no appeared, so tap latency is measurable
   distractionCheckOverlay.classList.remove("hidden");
 }
 
@@ -566,6 +567,36 @@ function finalizeSelfReport(why) {
 function fmtClock(sec) {
   const s = Math.max(0, Math.round(sec));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+// Compare the face/eye signals in the `span` seconds after a banner with the same span before it.
+// Uses the 10s timeline chunks, weighted by overlap, so numbers are approximate. Returns null without a timeline.
+function bannerReaction(timeline, t0, span) {
+  if (!timeline || !timeline.length) return null;
+  const stats = (from, to) => {
+    let sec = 0, seen = 0, gSum = 0, gW = 0, oSum = 0, oW = 0;
+    for (const r of timeline) {
+      const w = Math.min(to, r.t + 10) - Math.max(from, r.t);
+      if (w <= 0) continue;
+      sec += w;
+      const cov = r.lost ? 0 : (r.frames ? Math.min(1, r.n / r.frames) : 1);
+      seen += w * cov;
+      if (!r.lost && typeof r.gaze === "number") { gSum += w * r.gaze; gW += w; }
+      if (!r.lost && typeof r.gOff === "number") { oSum += w * r.gOff; oW += w; }
+    }
+    return sec > 0 ? { sec, lost: sec - seen, gaze: gW ? gSum / gW : null, off: oW ? oSum / oW : null } : null;
+  };
+  const pre = stats(Math.max(0, t0 - span), t0);
+  const post = stats(t0, t0 + span);
+  if (!pre || !post) return null;
+  const rd = (x) => (x === null ? null : Math.round(x));
+  const changed = post.lost - pre.lost >= 8 || (pre.gaze !== null && post.gaze !== null && pre.gaze - post.gaze >= 8) ||
+    (pre.off !== null && post.off !== null && post.off - pre.off >= 0.25);
+  return {
+    faceLostPre: Math.round(pre.lost), faceLostPost: Math.round(post.lost),
+    gazePre: rd(pre.gaze), gazePost: rd(post.gaze),
+    changed, unclear: pre.lost / pre.sec >= 0.5,
+  };
 }
 
 function buildSessionNotes(ctx) {
@@ -672,6 +703,25 @@ function buildSessionNotes(ctx) {
     add(t0, null, "banner", resp
       ? "Notification banner shown; answered '" + resp.type.replace("triggered_distraction_response_", "") + "' " + (resp.atSec - t0) + "s later (" + soundTxt + ")"
       : "Notification banner shown; no answer recorded (" + soundTxt + ")");
+
+    // What the sensors saw in the 30s after the banner vs the 30s before it (10s timeline chunks, so approximate).
+    const qShown = window.find((e) => e.type === "triggered_distraction_question_shown");
+    const react = bannerReaction(timeline, t0, 30);
+    const ev = events[events.length - 1];
+    if (qShown && resp) ev.tapLatencySec = resp.atSec - qShown.atSec;
+    if (react) {
+      const ans = resp ? resp.type.replace("triggered_distraction_response_", "") : null;
+      let verdict;
+      if (react.unclear) verdict = "unclear: the face was already mostly out of frame before the banner, so no reaction can be read";
+      else if (!ans) verdict = react.changed ? "visible reaction" : "no visible reaction";
+      else if (ans === "no" && react.changed) verdict = "answered 'no' but eyes/face changed (possible unnoticed distraction or unrelated movement)";
+      else if (ans === "yes" && !react.changed) verdict = "said 'yes' but eyes and face barely changed (brief glance or distraction the camera cannot see)";
+      else verdict = react.changed ? "visible reaction, matches the answer" : "no visible reaction, matches the answer";
+      ev.reaction = { ...react, answer: ans, verdict };
+      ev.detail += ". Next 30s: face out of frame " + react.faceLostPost + "s (30s before: " + react.faceLostPre + "s)" +
+        (react.gazePre !== null && react.gazePost !== null ? ", gaze stability " + react.gazePre + " -> " + react.gazePost : "") +
+        (typeof ev.tapLatencySec === "number" ? ", tapped " + ev.tapLatencySec + "s after the question appeared" : "") + " — " + verdict;
+    }
   }
 
   if (endReason === "stopped_by_user" && durationSec < maxSec - 5) add(durationSec, null, "ended_early", "Stopped early at " + fmtClock(durationSec) + " of " + fmtClock(maxSec));
@@ -1223,7 +1273,7 @@ function submitExitSurvey() {
     mentalEffort: effortInput ? Number(effortInput.value) : null,
     // the quiz is part of the same exit_survey object, because this save replaces the whole column
     ...(quizResult ? { quiz: quizResult } : {}),
-    accuracyRating: accuracyInput ? accuracyInput.value : null,
+    accuracyRating: accuracyInput ? Number(accuracyInput.value) : null,
     surprise: surpriseInput.value.trim(),
     wouldUse: wouldUseInput ? wouldUseInput.value : null,
   };
