@@ -654,7 +654,7 @@ function buildSessionNotes(ctx) {
   }
 
   // Chunk-level signals from the 10-second timeline
-  const normal = timeline.filter((r) => !r.lost && r.gaze !== undefined);
+  const normal = timeline.filter((r) => !r.lost && r.gaze !== undefined && (!r.frames || r.n / r.frames >= 0.5)); // skip chunks where the face was seen in under half the frames: too little data to judge eyes or head
   const basePitch = med(normal.map((r) => r.pitch).filter((p) => p !== null && p !== undefined));
   const byType = {};
   const mark = (type, r) => { (byType[type] = byType[type] || []).push(r.t); };
@@ -750,7 +750,8 @@ function buildSessionNotes(ctx) {
   let coverageTxt = "";
   const withFrames = timeline.filter((r) => r.frames);
   if (withFrames.length) {
-    const cov = withFrames.reduce((s, r) => s + r.n, 0) / withFrames.reduce((s, r) => s + r.frames, 0);
+    // share of TIME: average each ~10s chunk's face coverage (frame-weighting under-counts, because no-face stretches process more frames per second)
+    const cov = withFrames.reduce((s, r) => s + (r.lost ? 0 : Math.min(1, r.n / r.frames)), 0) / withFrames.length;
     coverageTxt = " Face visible " + Math.round(cov * 100) + "% of the time.";
   }
   const rows = timeline.filter((r) => !r.lost && typeof r.bq === "number");
@@ -1265,6 +1266,12 @@ async function endSession(reason = "unknown") {
   } catch (e) {
     console.warn("Could not build session notes:", e);
   }
+
+  try {
+    // what the tester sees as the big "Presence score" ring (same formula as showResults), so it is on record next to their answers
+    const brs = Math.max(0, 100 - Math.abs(summary.blinkRatePerMin - 18) * 4);
+    summary.perf.presenceScoreShown = Math.round(summary.gazeStabilityScore * 0.4 + summary.postureStabilityScore * 0.35 + brs * 0.25);
+  } catch (e) { /* never block the results screen */ }
 
   lastSessionSummary = summary;
   if (selectedTaskType === "read") showQuiz();
