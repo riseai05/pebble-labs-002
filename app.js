@@ -569,34 +569,50 @@ function fmtClock(sec) {
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 }
 
-// Compare the face/eye signals in the `span` seconds after a banner with the same span before it.
-// Uses the 10s timeline chunks, weighted by overlap, so numbers are approximate. Returns null without a timeline.
-function bannerReaction(timeline, t0, span) {
+// What changed around a banner, using several signals together and judging each against THIS person's own normal range
+// (median and spread of the same signal over the whole session), so a signal only counts as "moved" if it left their usual band.
+// Windows are whole 10s timeline chunks: the 30s starting with the chunk the banner landed in, vs the 30s before that chunk.
+// Approximate (10s resolution) and the cut-offs are rough rules, not validated.
+function bannerReaction(timeline, t0) {
   if (!timeline || !timeline.length) return null;
-  const stats = (from, to) => {
-    let sec = 0, seen = 0, gSum = 0, gW = 0, oSum = 0, oW = 0;
-    for (const r of timeline) {
-      const w = Math.min(to, r.t + 10) - Math.max(from, r.t);
-      if (w <= 0) continue;
-      sec += w;
-      const cov = r.lost ? 0 : (r.frames ? Math.min(1, r.n / r.frames) : 1);
-      seen += w * cov;
-      if (!r.lost && typeof r.gaze === "number") { gSum += w * r.gaze; gW += w; }
-      if (!r.lost && typeof r.gOff === "number") { oSum += w * r.gOff; oW += w; }
-    }
-    return sec > 0 ? { sec, lost: sec - seen, gaze: gW ? gSum / gW : null, off: oW ? oSum / oW : null } : null;
-  };
-  const pre = stats(Math.max(0, t0 - span), t0);
-  const post = stats(t0, t0 + span);
-  if (!pre || !post) return null;
-  const rd = (x) => (x === null ? null : Math.round(x));
-  const changed = post.lost - pre.lost >= 8 || (pre.gaze !== null && post.gaze !== null && pre.gaze - post.gaze >= 8) ||
-    (pre.off !== null && post.off !== null && post.off - pre.off >= 0.25);
-  return {
-    faceLostPre: Math.round(pre.lost), faceLostPost: Math.round(post.lost),
-    gazePre: rd(pre.gaze), gazePost: rd(post.gaze),
-    changed, unclear: pre.lost / pre.sec >= 0.5,
-  };
+  const k = Math.floor(t0 / 10) * 10;
+  const pre = timeline.filter((r) => r.t >= k - 30 && r.t < k);
+  const post = timeline.filter((r) => r.t >= k && r.t < k + 30);
+  if (!pre.length || !post.length) return null;
+  const cov = (r) => (r.lost ? 0 : r.frames ? Math.min(1, r.n / r.frames) : 1);
+  const lostSec = (rows) => Math.round(rows.reduce((a, r) => a + 10 * (1 - cov(r)), 0));
+  const usable = (r) => cov(r) >= 0.7 && !r.tap; // enough face frames, and not a chunk where the screen was tapped
+  const med = (a) => { const x = [...a].sort((u, v) => u - v); return x.length ? x[Math.floor(x.length / 2)] : null; };
+  const mad = (a, m) => med(a.map((v) => Math.abs(v - m)));
+  const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+  const normal = timeline.filter(usable);
+  const postOk = post.filter(usable);
+
+  const out = { faceLostPre: lostSec(pre), faceLostPost: lostSec(post), signals: [], unclear: lostSec(pre) >= 15 };
+  // face leaving the frame counts as a signal in itself
+  if (out.faceLostPost - out.faceLostPre >= 10) out.signals.push("face left the frame (" + out.faceLostPost + "s vs " + out.faceLostPre + "s before)");
+
+  if (normal.length >= 8 && postOk.length) {
+    const check = (label, get, minSpread, minShift, dir, fmt) => {
+      const base = normal.map(get).filter((v) => typeof v === "number");
+      const vals = postOk.map(get).filter((v) => typeof v === "number");
+      if (base.length < 8 || !vals.length) return;
+      const m = med(base);
+      const spread = Math.max(mad(base, m), minSpread);
+      const x = dir === "peak" ? Math.max(...vals) : mean(vals);
+      const shift = x - m;
+      if (Math.abs(shift) > Math.max(2.5 * spread, minShift)) out.signals.push(label + (shift > 0 ? " up" : " down") + " (" + fmt(x) + " vs his usual " + fmt(m) + ")");
+    };
+    const r1 = (v) => String(Math.round(v * 10) / 10);
+    check("movement (fidget)", (r) => r.fidget, 1, 4, "peak", r1);          // highest chunk after the banner
+    check("blinks per 10s", (r) => r.blinks, 1, 2, "mean", r1);
+    check("head tilt vs start", (r) => r.pitchRel, 2, 6, "mean", r1);
+    check("gaze stability", (r) => r.gaze, 3, 8, "mean", r1);
+    check("eyes off-screen share", (r) => r.gOff, 0.1, 0.3, "mean", (v) => Math.round(v * 100) + "%");
+  }
+  out.moved = out.signals.length;
+  out.changed = out.moved > 0;
+  return out;
 }
 
 function buildSessionNotes(ctx) {
@@ -706,21 +722,22 @@ function buildSessionNotes(ctx) {
 
     // What the sensors saw in the 30s after the banner vs the 30s before it (10s timeline chunks, so approximate).
     const qShown = window.find((e) => e.type === "triggered_distraction_question_shown");
-    const react = bannerReaction(timeline, t0, 30);
+    const react = bannerReaction(timeline, t0);
     const ev = events[events.length - 1];
     if (qShown && resp) ev.tapLatencySec = resp.atSec - qShown.atSec;
     if (react) {
       const ans = resp ? resp.type.replace("triggered_distraction_response_", "") : null;
       let verdict;
       if (react.unclear) verdict = "unclear: the face was already mostly out of frame before the banner, so no reaction can be read";
-      else if (!ans) verdict = react.changed ? "visible reaction" : "no visible reaction";
-      else if (ans === "no" && react.changed) verdict = "answered 'no' but eyes/face changed (possible unnoticed distraction or unrelated movement)";
-      else if (ans === "yes" && !react.changed) verdict = "said 'yes' but eyes and face barely changed (brief glance or distraction the camera cannot see)";
-      else verdict = react.changed ? "visible reaction, matches the answer" : "no visible reaction, matches the answer";
+      else {
+        const what = react.moved >= 2 ? "several signals moved together" : react.moved === 1 ? "one signal moved (weak evidence)" : "nothing moved beyond his own normal range";
+        if (ans === "no" && react.moved >= 2) verdict = what + ", but he answered 'no' (possible unnoticed distraction)";
+        else if (ans === "yes" && react.moved === 0) verdict = what + ", yet he said 'yes' (a brief glance or a distraction the camera cannot see)";
+        else verdict = what + (ans ? ", consistent with answering '" + ans + "'" : "");
+      }
       ev.reaction = { ...react, answer: ans, verdict };
-      ev.detail += ". Next 30s: face out of frame " + react.faceLostPost + "s (30s before: " + react.faceLostPre + "s)" +
-        (react.gazePre !== null && react.gazePost !== null ? ", gaze stability " + react.gazePre + " -> " + react.gazePost : "") +
-        (typeof ev.tapLatencySec === "number" ? ", tapped " + ev.tapLatencySec + "s after the question appeared" : "") + " — " + verdict;
+      ev.detail += ". Next 30s vs his normal: " + (react.signals.length ? react.signals.join("; ") : "no signal outside his usual range") +
+        (typeof ev.tapLatencySec === "number" ? "; tapped " + ev.tapLatencySec + "s after the question appeared" : "") + " — " + verdict;
     }
   }
 
